@@ -61,8 +61,8 @@ Editing is tied to the import secret. Open the import panel and enter it once, a
 | Variable | Default |
 | --- | --- |
 | `OPENAI_API_KEY` | Required |
-| `OPENAI_VISION_MODEL` | `gpt-5.4-mini`. Detection and the image tool host |
-| `OPENAI_IMAGE_MODEL` | `gpt-image-2`. Cutouts and spins |
+| `OPENAI_VISION_MODEL` | `gpt-6.1-sol`. Detection and the image tool host |
+| `OPENAI_IMAGE_MODEL` | `gpt-image-2.6-sunburst`. Cutouts and spins |
 | `OPENAI_IMAGE_QUALITY` | `high` |
 | `WARDROBE_MODEL_REFERENCE` | `data/model-reference.png`. Fallback when `data/models/` is empty |
 | `WARDROBE_DATA_DIR` | `data` |
@@ -70,7 +70,7 @@ Editing is tied to the import secret. Open the import panel and enter it once, a
 | `WARDROBE_STORAGE` | Unset, which uses `data/`. Set `blob` to use Vercel Blob |
 | `BLOB_READ_WRITE_TOKEN` | Written to `.env.local` by `vercel env pull` |
 
-Newer OpenAI models work by setting the two model variables. The hosted app runs on `gpt-6.1-sol` and `gpt-image-2.5-sunburst`.
+Other OpenAI models work by setting the two model variables. `gpt-image-2.6-flare` is the faster, cheaper image option, and `gpt-6.1-terra` is the cheaper text option.
 
 ## Deploy to Vercel
 

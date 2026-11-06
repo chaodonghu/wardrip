@@ -596,7 +596,7 @@ export function createImportApi({ storage, setting, background }) {
 
   async function createJobs(sources) {
     const [primary] = sources;
-    const detected = (await openAIAnalyze({ key: setting("OPENAI_API_KEY"), baseUrl: apiBaseUrl(), model: setting("OPENAI_VISION_MODEL", "gpt-5.4-mini"), image: primary, mime: "image/png", singleGarment: sources.length > 1 })).map(normalizeMetadata);
+    const detected = (await openAIAnalyze({ key: setting("OPENAI_API_KEY"), baseUrl: apiBaseUrl(), model: setting("OPENAI_VISION_MODEL", "gpt-6.1-sol"), image: primary, mime: "image/png", singleGarment: sources.length > 1 })).map(normalizeMetadata);
     const sourceFiles = sources.length === 1 ? ["original.png"] : sources.map((_, index) => `original-${index + 1}.png`);
     const cropFile = "crop.png";
     const jobs = [];
@@ -660,7 +660,7 @@ export function createImportApi({ storage, setting, background }) {
         const images = await Promise.all(sourceFiles.map(async (name) => ({ data: await requireBytes(jobKey(current.id, name)), mime: "image/png", name })));
         chromaKeyUsed = chooseChromaKey(current.metadata.color);
         const basePrompt = buildGarmentPrompt(current.metadata, chromaKeyUsed, images.length);
-        bytes = await openAIEdit({ key, baseUrl: apiBaseUrl(), responseModel: setting("OPENAI_IMAGE_TOOL_MODEL", setting("OPENAI_VISION_MODEL", "gpt-5.4-mini")), imageModel: setting("OPENAI_GARMENT_MODEL", setting("OPENAI_IMAGE_MODEL", "gpt-image-2")), quality: setting("OPENAI_IMAGE_QUALITY", "high"), size: "1024x1024", images, prompt: current.stages.garment.prompt ? `${basePrompt}\nUser regeneration direction: ${current.stages.garment.prompt}` : basePrompt });
+        bytes = await openAIEdit({ key, baseUrl: apiBaseUrl(), responseModel: setting("OPENAI_IMAGE_TOOL_MODEL", setting("OPENAI_VISION_MODEL", "gpt-6.1-sol")), imageModel: setting("OPENAI_GARMENT_MODEL", setting("OPENAI_IMAGE_MODEL", "gpt-image-2.6-sunburst")), quality: setting("OPENAI_IMAGE_QUALITY", "high"), size: "1024x1024", images, prompt: current.stages.garment.prompt ? `${basePrompt}\nUser regeneration direction: ${current.stages.garment.prompt}` : basePrompt });
         const rawName = `${stageName}-${stage.attempts}-source.png`;
         await storage.writeBytes(jobKey(current.id, rawName), bytes, "image/png");
         failedAssetUrl = `${ASSET_ROOT}/${current.id}/${rawName}`;
@@ -700,7 +700,7 @@ export function createImportApi({ storage, setting, background }) {
         const garment = await requireBytes(`library/${itemId}-garment.png`);
         const piece = (await loadImported()).find((item) => item.id === itemId);
         const chromaKey = chooseChromaKey(piece?.color);
-        const sheet = await openAIEdit({ key, baseUrl: apiBaseUrl(), responseModel: setting("OPENAI_IMAGE_TOOL_MODEL", setting("OPENAI_VISION_MODEL", "gpt-5.4-mini")), imageModel: setting("OPENAI_MODELED_MODEL", setting("OPENAI_IMAGE_MODEL", "gpt-image-2")), quality: setting("OPENAI_IMAGE_QUALITY", "high"), size: "1536x1024", images: [{ data: model.data, mime: "image/png", name: "model.png" }, { data: garment, mime: "image/png", name: "garment.png" }], prompt: turnaroundPrompt(chromaKey, piece) });
+        const sheet = await openAIEdit({ key, baseUrl: apiBaseUrl(), responseModel: setting("OPENAI_IMAGE_TOOL_MODEL", setting("OPENAI_VISION_MODEL", "gpt-6.1-sol")), imageModel: setting("OPENAI_MODELED_MODEL", setting("OPENAI_IMAGE_MODEL", "gpt-image-2.6-sunburst")), quality: setting("OPENAI_IMAGE_QUALITY", "high"), size: "1536x1024", images: [{ data: model.data, mime: "image/png", name: "model.png" }, { data: garment, mime: "image/png", name: "garment.png" }], prompt: turnaroundPrompt(chromaKey, piece) });
         const keyed = await Promise.all((await sliceTurnaround(sheet)).map(async (frame) => (await processChromaBackground(frame, chromaKey, { frame: false })).bytes));
         const frames = await stabilizeTurnaround(keyed);
         const names = turnaroundFiles(itemId);
