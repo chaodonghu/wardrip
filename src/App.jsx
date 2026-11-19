@@ -2,6 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Check, MagnifyingGlass, Plus, SpinnerGap, Trash, X } from "@phosphor-icons/react";
 import { importAuthHeaders, SECRET_CHANGE_EVENT, storedSecret, WardrobeImportFlow } from "./import-flow.jsx";
 import { OptimizedImage } from "./OptimizedImage.jsx";
+import { OutfitBuilder, OutfitGallery, OutfitViewer, outfitPieces } from "./outfits.jsx";
+import { SpinHero, TurnaroundPanel } from "./spin.jsx";
+import { MIN_OUTFIT_PIECES } from "../shared/outfit-slots.mjs";
 
 const DELETED_STORAGE_KEY = "open-wardrobe-deleted-v1";
 
@@ -16,22 +19,33 @@ const TYPES = [
 
 const TYPE_MAP = Object.fromEntries(TYPES.map((type) => [type.id, type]));
 
+// Outfits share the rail with the piece categories, but the view lists outfits instead of pieces.
+const OUTFITS_VIEW = "outfits";
+
 // The gallery view lives in the URL as ?type=<id>&q=<search>, so a link reproduces the same filtered set.
-// Piece ids are "import-<uuid>" in the library; the link carries just the uuid.
-const pieceIdFromUrl = (value) => (value ? (value.startsWith("import-") ? value : `import-${value}`) : null);
-const pieceParam = (id) => id.replace(/^import-/, "");
+// Ids are "import-<uuid>" for pieces and "outfit-<uuid>" for outfits; a link carries just the uuid.
+const isOutfitId = (id) => id.startsWith("outfit-");
+const idFromUrl = (prefix, value) => (value ? (value.startsWith(prefix) ? value : `${prefix}${value}`) : null);
+const idParam = (id) => id.replace(/^(import|outfit)-/, "");
 
 function readViewFromUrl() {
   const params = new URLSearchParams(window.location.search);
   const type = params.get("type");
-  return { type: type && type !== "all" && TYPE_MAP[type] ? type : "all", query: params.get("q") || "", piece: pieceIdFromUrl(params.get("piece")) };
+  const outfit = idFromUrl("outfit-", params.get("outfit"));
+  return {
+    type: outfit || type === OUTFITS_VIEW ? OUTFITS_VIEW : type && type !== "all" && TYPE_MAP[type] ? type : "all",
+    query: params.get("q") || "",
+    piece: idFromUrl("import-", params.get("piece")),
+    outfit,
+  };
 }
 
-function writeViewToUrl({ type, query, piece }) {
+function writeViewToUrl({ type, query, piece, outfit }) {
   const params = new URLSearchParams(window.location.search);
   if (type === "all") params.delete("type"); else params.set("type", type);
   if (query.trim()) params.set("q", query.trim()); else params.delete("q");
-  if (piece) params.set("piece", pieceParam(piece)); else params.delete("piece");
+  if (piece) params.set("piece", idParam(piece)); else params.delete("piece");
+  if (outfit) params.set("outfit", idParam(outfit)); else params.delete("outfit");
   const search = params.toString();
   const next = `${window.location.pathname}${search ? `?${search}` : ""}${window.location.hash}`;
   if (next !== `${window.location.pathname}${window.location.search}${window.location.hash}`) window.history.replaceState(null, "", next);
@@ -66,8 +80,6 @@ function matchesSearch(item, query) {
   return needles.every((needle) => joined.includes(needle) || compact.includes(needle) || haystack.some((word) => withinEdits(needle, word, needle.length >= 7 ? 2 : needle.length >= 4 ? 1 : 0)));
 }
 const TYPE_ORDER = Object.fromEntries(TYPES.slice(1).map((type, index) => [type.id, index]));
-const TURNAROUND_VIEWS = ["Front", "Front left", "Left", "Back left", "Back", "Back right", "Right", "Front right"];
-const TURNAROUND_ACTIONS = { ready: "Regenerate", failed: "Try again" };
 
 
 
@@ -384,115 +396,7 @@ function ItemEditor({ draft, setDraft, palette, sampling, setSampling, sampleSta
   );
 }
 
-function TurnaroundStrip({ frames, label }) {
-  const [index, setIndex] = useState(0);
-  const dragRef = useRef(null);
-  const count = frames.length;
-  const wrap = (value) => ((value % count) + count) % count;
-
-  const startDrag = (event) => {
-    if (event.button !== 0) return;
-    event.currentTarget.setPointerCapture(event.pointerId);
-    dragRef.current = { x: event.clientX, index, segment: event.currentTarget.clientWidth / count };
-  };
-
-  const drag = (event) => {
-    const start = dragRef.current;
-    if (!start) return;
-    setIndex(wrap(start.index + Math.round((start.x - event.clientX) / start.segment)));
-  };
-
-  const endDrag = () => { dragRef.current = null; };
-
-  const onKeyDown = (event) => {
-    const delta = { ArrowLeft: -1, ArrowRight: 1 }[event.key];
-    if (!delta) return;
-    event.preventDefault();
-    setIndex((current) => wrap(current + delta));
-  };
-
-  return (
-    <div className="turnaround-strip">
-      <div
-        className="turnaround-stage"
-        role="slider"
-        tabIndex={0}
-        aria-label={label}
-        aria-valuemin={1}
-        aria-valuemax={count}
-        aria-valuenow={index + 1}
-        aria-valuetext={TURNAROUND_VIEWS[index] || `View ${index + 1}`}
-        onPointerDown={startDrag}
-        onPointerMove={drag}
-        onPointerUp={endDrag}
-        onPointerCancel={endDrag}
-        onKeyDown={onKeyDown}
-      >
-        {frames.map((frame, frameIndex) => (
-          <img
-            key={frame}
-            className={frameIndex === index ? "active" : ""}
-            src={frame}
-            alt=""
-            draggable={false}
-          />
-        ))}
-      </div>
-      <div className="turnaround-dots" aria-hidden="true">
-        {frames.map((frame, frameIndex) => <span key={frame} className={frameIndex === index ? "active" : ""} />)}
-      </div>
-    </div>
-  );
-}
-
-function TurnaroundPanel({ turnaround, onGenerate, onCopyLink, canEdit }) {
-  const [pending, setPending] = useState(false);
-  const [requestError, setRequestError] = useState("");
-  const status = turnaround?.status;
-
-  const generate = async () => {
-    setPending(true);
-    setRequestError("");
-    try {
-      await onGenerate();
-    } catch (error) {
-      setRequestError(error.message);
-    } finally {
-      setPending(false);
-    }
-  };
-
-  return (
-    <section className="turnaround" aria-label="360 view controls">
-      {status === "failed" && <p className="turnaround-error" role="alert">{turnaround.error}</p>}
-      <div className="turnaround-actions">
-        {canEdit && status !== "processing" && turnaround?.errorCode !== "moderation_blocked" && (
-          <button className="turnaround-action" type="button" onClick={generate} disabled={pending}>
-            {TURNAROUND_ACTIONS[status] || "Generate 360 view"}
-          </button>
-        )}
-        <button className="turnaround-action" type="button" onClick={onCopyLink}>Copy link</button>
-      </div>
-      {requestError && <p className="turnaround-error" role="alert">{requestError}</p>}
-    </section>
-  );
-}
-
-function SpinHero({ turnaround, label, sampling, garmentArtwork }) {
-  const frames = turnaround?.frames || [];
-  return (
-    <div className="spin-hero">
-      {sampling ? garmentArtwork : frames.length ? <TurnaroundStrip frames={frames} label={label} /> : (
-        <p className="turnaround-status" role="status">
-          {turnaround?.status === "processing" && <SpinnerGap size={14} className="import-spinner" aria-hidden="true" />}
-          {turnaround?.status === "processing" ? "Preparing 360 view" : "No 360 view yet"}
-        </p>
-      )}
-    </div>
-  );
-}
-
-function ItemViewer({ item, onClose, onSave, onDelete, onGenerateTurnaround, onCopyLink, canEdit }) {
+function ItemViewer({ item, outfitCount, onClose, onSave, onDelete, onGenerateTurnaround, onCopyLink, canEdit }) {
   const closeButtonRef = useRef(null);
   const imageRef = useRef(null);
   const samplingCanvasRef = useRef(null);
@@ -640,8 +544,7 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateTurnaround, onC
       <SpinHero
         turnaround={item.turnaround}
         label={`${draft.name || type} 360 view`}
-        sampling={sampling}
-        garmentArtwork={garmentArtwork}
+        replacement={sampling ? garmentArtwork : null}
       />
 
       <TurnaroundPanel turnaround={item.turnaround} onGenerate={() => onGenerateTurnaround(item.id)} onCopyLink={() => onCopyLink(item.id)} canEdit={canEdit} />
@@ -664,6 +567,7 @@ function ItemViewer({ item, onClose, onSave, onDelete, onGenerateTurnaround, onC
 
         {closeBlocked && <p className="unsaved-notice" role="status">Save or cancel changes before closing.</p>}
         {saveError && <p className="unsaved-notice" role="alert">{saveError}</p>}
+        {outfitCount > 0 && <p className="outfit-usage">In {outfitCount} {outfitCount === 1 ? "outfit" : "outfits"}. Deleting this piece deletes {outfitCount === 1 ? "it" : "them"} too.</p>}
 
         <div className="viewer-actions">
           <button className="delete-button" type="button" onClick={() => onDelete(item.id)}>
@@ -699,14 +603,44 @@ function useCanEdit() {
   return !requiresSecret || hasSecret;
 }
 
+// Fresh records only replace a spin that changed, so everything else keeps its identity and unsaved edits survive a poll.
+function mergeTurnarounds(current, records) {
+  const byId = new Map(records.map((record) => [record.id, record]));
+  const next = current.map((item) => {
+    const record = byId.get(item.id);
+    if (!record || JSON.stringify(record.turnaround) === JSON.stringify(item.turnaround)) return item;
+    return { ...item, turnaround: record.turnaround };
+  });
+  return next.some((item, index) => item !== current[index]) ? next : current;
+}
+
+// Polls a list while any of its spins is still being prepared.
+function useTurnaroundPolling(url, records, setRecords) {
+  const processing = records.some((record) => record.turnaround?.status === "processing");
+  useEffect(() => {
+    if (!processing) return undefined;
+    const timer = setInterval(() => {
+      fetch(url, { cache: "no-store" })
+        .then((response) => response.ok ? response.json() : null)
+        .then((fresh) => fresh && setRecords((current) => mergeTurnarounds(current, fresh)))
+        .catch(() => {});
+    }, 5000);
+    return () => clearInterval(timer);
+  }, [processing, url, setRecords]);
+}
+
 export function App() {
   const [items, setItems] = useState([]);
+  const [outfits, setOutfits] = useState([]);
   const [initialView] = useState(readViewFromUrl);
   const canEdit = useCanEdit();
   const [activeType, setActiveType] = useState(initialView.type);
   const [query, setQuery] = useState(initialView.query);
   const [selectedId, setSelectedId] = useState(initialView.piece);
+  const [selectedOutfitId, setSelectedOutfitId] = useState(initialView.outfit);
+  const [building, setBuilding] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [outfitsLoading, setOutfitsLoading] = useState(true);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -722,43 +656,41 @@ export function App() {
       })
       .catch((requestError) => setError(requestError.message))
       .finally(() => setLoading(false));
+    fetch("/api/import/outfits", { cache: "no-store" })
+      .then((response) => {
+        if (!response.ok) throw new Error("Could not load the outfits.");
+        return response.json();
+      })
+      .then(setOutfits)
+      .catch((requestError) => setError(requestError.message))
+      .finally(() => setOutfitsLoading(false));
   }, []);
 
-  const mergeTurnarounds = useCallback((records) => {
-    const byId = new Map(records.map((record) => [record.id, record]));
-    setItems((current) => {
-      const next = current.map((item) => {
-        const record = byId.get(item.id);
-        if (!record || JSON.stringify(record.turnaround) === JSON.stringify(item.turnaround)) return item;
-        return { ...item, turnaround: record.turnaround };
-      });
-      return next.some((item, index) => item !== current[index]) ? next : current;
-    });
-  }, []);
-
-  const hasProcessingTurnaround = items.some((item) => item.turnaround?.status === "processing");
-
-  useEffect(() => {
-    if (!hasProcessingTurnaround) return undefined;
-    const timer = setInterval(() => {
-      fetch("/api/import/wardrobe", { cache: "no-store" })
-        .then((response) => response.ok ? response.json() : null)
-        .then((records) => records && mergeTurnarounds(records))
-        .catch(() => {});
-    }, 5000);
-    return () => clearInterval(timer);
-  }, [hasProcessingTurnaround, mergeTurnarounds]);
+  useTurnaroundPolling("/api/import/wardrobe", items, setItems);
+  useTurnaroundPolling("/api/import/outfits", outfits, setOutfits);
 
   const generateTurnaround = async (id) => {
-    const response = await fetch(`/api/import/wardrobe/${id}/turnaround`, { method: "POST", headers: importAuthHeaders() });
+    const response = await fetch(`/api/import/${isOutfitId(id) ? "outfits" : "wardrobe"}/${id}/turnaround`, { method: "POST", headers: importAuthHeaders() });
     const result = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(result.error || "Could not start the 360 view.");
-    mergeTurnarounds([result]);
+    (isOutfitId(id) ? setOutfits : setItems)((current) => mergeTurnarounds(current, [result]));
   };
 
+  const showingOutfits = activeType === OUTFITS_VIEW;
+  // The outfits view needs both lists: an outfit shows its pieces.
+  const waiting = loading || (showingOutfits && outfitsLoading);
   const selectedItem = items.find((item) => item.id === selectedId) || null;
+  const selectedOutfit = outfits.find((outfit) => outfit.id === selectedOutfitId) || null;
+  const itemsById = useMemo(() => new Map(items.map((item) => [item.id, item])), [items]);
+  const canBuild = canEdit && items.length >= MIN_OUTFIT_PIECES;
 
-  useEffect(() => { writeViewToUrl({ type: activeType, query, piece: selectedId }); }, [activeType, query, selectedId]);
+  useEffect(() => { writeViewToUrl({ type: activeType, query, piece: selectedId, outfit: selectedOutfitId }); }, [activeType, query, selectedId, selectedOutfitId]);
+
+  // An outfit answers to its own name and to anything that finds one of its pieces. Newest first.
+  const visibleOutfits = useMemo(() => outfits
+    .map((outfit) => ({ outfit, pieces: outfitPieces(outfit.pieces, itemsById) }))
+    .filter(({ outfit, pieces }) => matchesSearch({ name: [outfit.name, ...Object.values(pieces).map((piece) => piece.name)].join(" "), tags: Object.values(pieces).flatMap((piece) => piece.tags || []) }, query))
+    .sort((a, b) => b.outfit.createdAt.localeCompare(a.outfit.createdAt)), [outfits, itemsById, query]);
 
   const visibleItems = useMemo(() => {
     const filtered = items.filter((item) => (activeType === "all" || item.part === activeType) && matchesSearch(item, query));
@@ -774,6 +706,7 @@ export function App() {
   const chooseType = (typeId) => {
     setActiveType(typeId);
     setSelectedId(null);
+    setSelectedOutfitId(null);
   };
 
   const [toast, setToast] = useState(null);
@@ -785,7 +718,7 @@ export function App() {
   }, []);
 
   const copyLink = useCallback(async (id) => {
-    const link = `${window.location.origin}${window.location.pathname}?piece=${pieceParam(id)}`;
+    const link = `${window.location.origin}${window.location.pathname}?${isOutfitId(id) ? "outfit" : "piece"}=${idParam(id)}`;
     try {
       await navigator.clipboard.writeText(link);
       announce("Link copied");
@@ -814,6 +747,9 @@ export function App() {
       try {
         const response = await fetch(`/api/import/wardrobe/${id}`, { method: "DELETE", headers: importAuthHeaders() });
         if (!response.ok && response.status !== 404) throw new Error("Could not delete the imported item.");
+        const orphaned = new Set((await response.json().catch(() => ({}))).outfits || []);
+        setOutfits((current) => current.filter((outfit) => !orphaned.has(outfit.id)));
+        setSelectedOutfitId((current) => orphaned.has(current) ? null : current);
       } catch (requestError) {
         setError(requestError.message);
         return;
@@ -825,12 +761,50 @@ export function App() {
     announce("Deleted");
   };
 
+  const createOutfit = async (pieces, name) => {
+    const response = await fetch("/api/import/outfits", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...importAuthHeaders() },
+      body: JSON.stringify({ pieces, name }),
+    });
+    const outfit = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(outfit.error || (response.status === 401 ? "The import secret was rejected." : "The outfit could not be started."));
+    setOutfits((current) => current.some((existing) => existing.id === outfit.id) ? current : [...current, outfit]);
+    setBuilding(false);
+    setSelectedOutfitId(outfit.id);
+  };
+
+  const renameOutfit = async (id, name) => {
+    const response = await fetch(`/api/import/outfits/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", ...importAuthHeaders() },
+      body: JSON.stringify({ name }),
+    });
+    const saved = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(saved.error || (response.status === 401 ? "The import secret was rejected." : "The outfit could not be renamed."));
+    setOutfits((current) => current.map((outfit) => outfit.id === saved.id ? { ...outfit, name: saved.name } : outfit));
+    announce("Saved");
+  };
+
+  const deleteOutfit = async (id) => {
+    try {
+      const response = await fetch(`/api/import/outfits/${id}`, { method: "DELETE", headers: importAuthHeaders() });
+      if (!response.ok && response.status !== 404) throw new Error("Could not delete the outfit.");
+    } catch (requestError) {
+      setError(requestError.message);
+      return;
+    }
+    setOutfits((current) => current.filter((outfit) => outfit.id !== id));
+    setSelectedOutfitId(null);
+    announce("Deleted");
+  };
+
   const addImportedItem = useCallback((newItem) => {
     setItems((current) => current.some((item) => item.id === newItem.id) ? current : [...current, newItem]);
   }, []);
 
   return (
-    <div className={`app-shell${selectedItem ? " has-selection" : ""}`}>
+    <div className={`app-shell${selectedItem || selectedOutfit || building ? " has-selection" : ""}`}>
       <main className="gallery-pane">
         <aside className="gallery-rail">
           <label className="gallery-search">
@@ -840,7 +814,7 @@ export function App() {
               value={query}
               onChange={(event) => { setQuery(event.target.value); setSelectedId(null); }}
               placeholder="Search"
-              aria-label="Search pieces by name or detail"
+              aria-label={showingOutfits ? "Search outfits by name or piece" : "Search pieces by name or detail"}
               autoComplete="off"
               spellCheck={false}
             />
@@ -858,22 +832,43 @@ export function App() {
                 {type.label}
               </button>
             ))}
+            <button
+              type="button"
+              className={`category-nav__outfits${showingOutfits ? " active" : ""}`}
+              onClick={() => chooseType(OUTFITS_VIEW)}
+              aria-pressed={showingOutfits}
+            >
+              Outfits
+            </button>
           </nav>
         </aside>
 
         <div className="gallery-main">
 
           {error && <p className="status error">{error}</p>}
-          {!error && loading && (
+          {!error && waiting && (
             <div className="gallery-skeleton" role="status" aria-label="Loading wardrobe" aria-busy="true" />
           )}
-          {!error && !loading && !items.length && (
+          {showingOutfits && !waiting && !(error && !outfits.length) && (
+            <OutfitGallery
+              outfits={visibleOutfits}
+              total={outfits.length}
+              query={query}
+              canEdit={canEdit}
+              canBuild={canBuild}
+              selectedId={selectedOutfitId}
+              onOpen={setSelectedOutfitId}
+              onNew={() => setBuilding(true)}
+              onClearSearch={() => setQuery("")}
+            />
+          )}
+          {!showingOutfits && !error && !loading && !items.length && (
             <div className="gallery-empty">
               <p className="gallery-empty__title">Your wardrobe is empty.</p>
               <p className="gallery-empty__hint">Drop a photo here, paste one, or use the button in the corner to import your first piece.</p>
             </div>
           )}
-          {!!items.length && !visibleItems.length && (
+          {!showingOutfits && !!items.length && !visibleItems.length && (
             <div className="gallery-empty">
               <p className="gallery-empty__title">
                 {query.trim()
@@ -891,7 +886,7 @@ export function App() {
             </div>
           )}
 
-          {!!items.length && (
+          {!showingOutfits && !!items.length && (
             <section className="gallery-grid" aria-label={`${TYPE_MAP[activeType]?.label || "All"} wardrobe items`}>
               {visibleItems.map((item) => (
                 <GalleryItem
@@ -907,7 +902,10 @@ export function App() {
       </main>
 
       {toast && <div className="toast" role="status" key={toast.key}>{toast.text}</div>}
-      {selectedItem && <ItemViewer item={selectedItem} onClose={() => setSelectedId(null)} onSave={saveItem} onDelete={deleteItem} onGenerateTurnaround={generateTurnaround} onCopyLink={copyLink} canEdit={canEdit} />}
+      {selectedItem && <ItemViewer item={selectedItem} outfitCount={outfits.filter((outfit) => Object.values(outfit.pieces).includes(selectedItem.id)).length} onClose={() => setSelectedId(null)} onSave={saveItem} onDelete={deleteItem} onGenerateTurnaround={generateTurnaround} onCopyLink={copyLink} canEdit={canEdit} />}
+      {/* A piece opened from an outfit sits on top of it, so closing the piece returns to the outfit. */}
+      {!selectedItem && selectedOutfit && <OutfitViewer outfit={selectedOutfit} pieces={outfitPieces(selectedOutfit.pieces, itemsById)} canEdit={canEdit} onClose={() => setSelectedOutfitId(null)} onGenerate={generateTurnaround} onCopyLink={copyLink} onRename={renameOutfit} onDelete={deleteOutfit} onOpenPiece={setSelectedId} />}
+      {!selectedItem && !selectedOutfit && building && <OutfitBuilder items={items} outfits={outfits} onCreate={createOutfit} onOpen={(id) => { setBuilding(false); setSelectedOutfitId(id); }} onClose={() => setBuilding(false)} />}
       <WardrobeImportFlow onGarmentApproved={addImportedItem} />
     </div>
   );

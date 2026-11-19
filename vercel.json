@@ -16,6 +16,16 @@
       "dest": "/api/share"
     },
     {
+      "src": "/",
+      "has": [
+        {
+          "type": "query",
+          "key": "outfit"
+        }
+      ],
+      "dest": "/api/share"
+    },
+    {
       "handle": "filesystem"
     },
     {
