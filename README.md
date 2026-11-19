@@ -116,11 +116,11 @@ The hosted app runs the import API as one Vercel function and keeps the library,
 
 6. Open the deployed app on your phone, open the import panel, and enter the import secret. The browser remembers it, and until it has one the app stays read-only.
 
-Preview deployments read the same Blob store as production. They have no import secret, so they are read-only: every write is refused. Add `WARDROBE_IMPORT_SECRET` and `OPENAI_API_KEY` to the Preview environment if you want to import from a preview, knowing it writes to the real library.
-
 Code ships through Git. Data does not: imports made in the hosted app land in Blob directly, and `npm run publish-data` is only needed when you add model photos or import pieces locally and want them hosted. It replaces the hosted library with the local one.
 
 Vercel stops a function after 300 seconds. If a generation step runs out of time, the job shows "Generation timed out. Try regenerating." six minutes after the step started.
+
+Preview deployments read the same Blob store as production. They have no import secret, so they are read-only: every write is refused. Add `WARDROBE_IMPORT_SECRET` and `OPENAI_API_KEY` to the Preview environment if you want to import from a preview, knowing it writes to the real library.
 
 ## Import with Codex
 
