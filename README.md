@@ -126,7 +126,7 @@ The hosted app runs the import API as one Vercel function and keeps the library,
    npm run publish-data
    ```
 
-   The script resizes every model photo to 2048 px on the long edge before it uploads. It also replaces the hosted `library.json` with your local copy, so run it before you import from the hosted app, and again after you add or change model photos. Outfits built locally are published with it.
+   The script resizes every model photo to 2048 px on the long edge before it uploads. It also replaces the hosted `library.json` with your local copy, so run it before you import from the hosted app, and again after you add or change model photos. If you have built outfits locally, they replace the hosted ones the same way.
 
 5. Connect the project to the GitHub repo so every merge to `main` deploys to production and every pull request gets a preview URL.
 

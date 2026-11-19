@@ -640,6 +640,7 @@ export function App() {
   const [selectedOutfitId, setSelectedOutfitId] = useState(initialView.outfit);
   const [building, setBuilding] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [outfitsLoading, setOutfitsLoading] = useState(true);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -661,7 +662,8 @@ export function App() {
         return response.json();
       })
       .then(setOutfits)
-      .catch((requestError) => setError(requestError.message));
+      .catch((requestError) => setError(requestError.message))
+      .finally(() => setOutfitsLoading(false));
   }, []);
 
   useTurnaroundPolling("/api/import/wardrobe", items, setItems);
@@ -675,6 +677,8 @@ export function App() {
   };
 
   const showingOutfits = activeType === OUTFITS_VIEW;
+  // The outfits view needs both lists: an outfit shows its pieces.
+  const waiting = loading || (showingOutfits && outfitsLoading);
   const selectedItem = items.find((item) => item.id === selectedId) || null;
   const selectedOutfit = outfits.find((outfit) => outfit.id === selectedOutfitId) || null;
   const itemsById = useMemo(() => new Map(items.map((item) => [item.id, item])), [items]);
@@ -842,10 +846,10 @@ export function App() {
         <div className="gallery-main">
 
           {error && <p className="status error">{error}</p>}
-          {!error && loading && (
+          {!error && waiting && (
             <div className="gallery-skeleton" role="status" aria-label="Loading wardrobe" aria-busy="true" />
           )}
-          {showingOutfits && !loading && (
+          {showingOutfits && !waiting && !(error && !outfits.length) && (
             <OutfitGallery
               outfits={visibleOutfits}
               total={outfits.length}

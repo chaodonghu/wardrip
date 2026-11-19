@@ -497,6 +497,8 @@ async function openAIFetch(url, options) {
 }
 
 const MODERATION_BLOCKED = "moderation_blocked";
+// The block message from the image call talks about one piece in the import queue, which an outfit is not.
+const OUTFIT_BLOCKED = "Blocked by OpenAI. Its safety filter will not draw this outfit, most likely because one piece looks like a protected character or brand. Retrying will not help, so build the outfit without that piece.";
 
 function imageFailure(response) {
   const failed = response.output?.find((item) => item.type === "image_generation_call" && item.error);
@@ -650,21 +652,32 @@ export function createImportApi({ storage, setting, background }) {
   // Pieces and outfits live in separate lists, and the id prefix says which one a record is in.
   const listKey = (id) => isOutfitId(id) ? OUTFITS_KEY : LIBRARY_KEY;
 
-  // Re-reads the list so a concurrent edit or delete of another record survives the write.
-  async function patchRecord(id, patch) {
-    const records = await loadList(listKey(id));
-    const index = records.findIndex((record) => record.id === id);
-    if (index === -1) return null;
-    records[index] = { ...records[index], ...patch(records[index]) };
-    await storage.writeJson(listKey(id), records);
-    return records[index];
+  // Every change to a list is a read, a change and a write. They run one at a time per list, so a spin that finishes
+  // while another record is being added, renamed or deleted cannot start from a stale copy and drop that change.
+  // `change` returns the list to write as `next`, or leaves it out to write nothing. The queue lives in this process.
+  const writers = new Map();
+  function updateList(key, change) {
+    const turn = (writers.get(key) || Promise.resolve()).then(async () => {
+      const { next, result } = await change(await loadList(key));
+      if (next) await storage.writeJson(key, next);
+      return result;
+    });
+    writers.set(key, turn.catch(() => {}));
+    return turn;
   }
 
+  const patchRecord = (id, patch) => updateList(listKey(id), (records) => {
+    const index = records.findIndex((record) => record.id === id);
+    if (index === -1) return { result: null };
+    const patched = { ...records[index], ...patch(records[index]) };
+    return { next: records.with(index, patched), result: patched };
+  });
+
   async function removeOutfits(shouldRemove) {
-    const outfits = await loadOutfits();
-    const removed = outfits.filter(shouldRemove);
-    if (!removed.length) return [];
-    await storage.writeJson(OUTFITS_KEY, outfits.filter((outfit) => !removed.includes(outfit)));
+    const removed = await updateList(OUTFITS_KEY, (outfits) => {
+      const gone = outfits.filter(shouldRemove);
+      return gone.length ? { next: outfits.filter((outfit) => !gone.includes(outfit)), result: gone } : { result: gone };
+    });
     await Promise.all(removed.flatMap((outfit) => turnaroundFiles(outfit.id)).map((name) => storage.remove(`library/${name}`)));
     return removed.map((outfit) => outfit.id);
   }
@@ -697,24 +710,23 @@ export function createImportApi({ storage, setting, background }) {
     const garmentSource = job.stages.garment.assetUrl ? assetName(job.stages.garment.assetUrl) : `garment-${job.stages.garment.attempts}.png`;
     await storage.writeBytes(`library/${garmentName}`, await requireBytes(jobKey(job.id, garmentSource)), "image/png");
     const metadata = job.metadata || {};
-    const records = await loadImported();
-    const existing = records.find((record) => record.id === id);
-    const record = {
-      id,
-      name: metadata.name || "New piece",
-      part: metadata.part || "upperbody",
-      color: metadata.color || "#d8d0c2",
-      secondaryColor: metadata.secondaryColor || null,
-      palette: [metadata.color, metadata.secondaryColor].filter(Boolean),
-      tags: Array.isArray(metadata.tags) ? metadata.tags : [],
-      image: `${LIBRARY_ASSET_ROOT}/${garmentName}`,
-      thumbnail: `${LIBRARY_ASSET_ROOT}/${garmentName}`,
-      importJobId: job.id,
-      ...(existing?.turnaround && { turnaround: existing.turnaround }),
-    };
-    const next = [...records.filter((item) => item.id !== id), record];
-    await storage.writeJson(LIBRARY_KEY, next);
-    return record;
+    return updateList(LIBRARY_KEY, (records) => {
+      const existing = records.find((record) => record.id === id);
+      const record = {
+        id,
+        name: metadata.name || "New piece",
+        part: metadata.part || "upperbody",
+        color: metadata.color || "#d8d0c2",
+        secondaryColor: metadata.secondaryColor || null,
+        palette: [metadata.color, metadata.secondaryColor].filter(Boolean),
+        tags: Array.isArray(metadata.tags) ? metadata.tags : [],
+        image: `${LIBRARY_ASSET_ROOT}/${garmentName}`,
+        thumbnail: `${LIBRARY_ASSET_ROOT}/${garmentName}`,
+        importJobId: job.id,
+        ...(existing?.turnaround && { turnaround: existing.turnaround }),
+      };
+      return { next: [...records.filter((item) => item.id !== id), record], result: record };
+    });
   }
 
   async function generate(job, stageName) {
@@ -805,7 +817,8 @@ export function createImportApi({ storage, setting, background }) {
         }) }));
         if (!record) await Promise.all(names.map((name) => storage.remove(`library/${name}`)));
       } catch (error) {
-        await patchRecord(itemId, () => ({ turnaround: turnaroundState("failed", { error: error.message, errorCode: error.code || null }) }));
+        const message = error.code === MODERATION_BLOCKED && isOutfitId(itemId) ? OUTFIT_BLOCKED : error.message;
+        await patchRecord(itemId, () => ({ turnaround: turnaroundState("failed", { error: message, errorCode: error.code || null }) }));
       }
     })().finally(() => running.delete(lock));
     running.set(lock, task);
@@ -858,13 +871,14 @@ export function createImportApi({ storage, setting, background }) {
     if (url.pathname === "/api/import/outfits" && request.method === "POST") {
       const input = (await body(request)) || {};
       const pieces = outfitSelection(input.pieces, await loadImported());
-      const outfits = await loadOutfits();
-      const existing = outfits.find((outfit) => outfitKey(outfit.pieces) === outfitKey(pieces));
-      if (existing) return json(200, existing);
-      const outfit = { id: `outfit-${randomUUID()}`, name: outfitName(input.name) || nextOutfitName(outfits), pieces, turnaround: turnaroundState("processing"), createdAt: new Date().toISOString() };
-      await storage.writeJson(OUTFITS_KEY, [...outfits, outfit]);
-      background(generateTurnaround(outfit.id));
-      return json(201, outfit);
+      const { outfit, created } = await updateList(OUTFITS_KEY, (outfits) => {
+        const existing = outfits.find((saved) => outfitKey(saved.pieces) === outfitKey(pieces));
+        if (existing) return { result: { outfit: existing, created: false } };
+        const added = { id: `outfit-${randomUUID()}`, name: outfitName(input.name) || nextOutfitName(outfits), pieces, turnaround: turnaroundState("processing"), createdAt: new Date().toISOString() };
+        return { next: [...outfits, added], result: { outfit: added, created: true } };
+      });
+      if (created) background(generateTurnaround(outfit.id));
+      return json(created ? 201 : 200, outfit);
     }
     const outfitMatch = url.pathname.match(/^\/api\/import\/outfits\/(outfit-[a-f0-9-]{36})$/i);
     if (outfitMatch && request.method === "PATCH") {
@@ -891,13 +905,15 @@ export function createImportApi({ storage, setting, background }) {
     }
     if (wardrobeDeleteMatch && request.method === "DELETE") {
       const id = wardrobeDeleteMatch[1];
-      const records = await loadImported();
-      const next = records.filter((record) => record.id !== id);
-      if (next.length === records.length) return json(404, { error: "Imported wardrobe item not found" });
-      await storage.writeJson(LIBRARY_KEY, next);
-      await Promise.all([`${id}-garment.png`, `${id}-modeled.png`, ...turnaroundFiles(id)].map((name) => storage.remove(`library/${name}`)));
-      // An outfit without one of its pieces is a different outfit, so it goes with the piece.
+      const found = await updateList(LIBRARY_KEY, (records) => {
+        const next = records.filter((record) => record.id !== id);
+        return next.length === records.length ? { result: false } : { next, result: true };
+      });
+      if (!found) return json(404, { error: "Imported wardrobe item not found" });
+      // An outfit without one of its pieces is a different outfit, so it goes with the piece. Both lists are
+      // settled before any file is removed: a failed cleanup then leaves stray files, never an outfit without its piece.
       const outfits = await removeOutfits((outfit) => Object.values(outfit.pieces).includes(id));
+      await Promise.all([`${id}-garment.png`, `${id}-modeled.png`, ...turnaroundFiles(id)].map((name) => storage.remove(`library/${name}`)));
       return json(200, { deleted: true, id, outfits });
     }
     const libraryAssetMatch = url.pathname.match(/^\/api\/import\/library\/([\w-][\w.-]*\.png)$/i);

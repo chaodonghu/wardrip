@@ -141,6 +141,9 @@ export function OutfitBuilder({ items, outfits, onCreate, onOpen, onClose }) {
     }
   };
 
+  // A request that is on its way cannot be taken back, so the panel stays until it answers and can show a failure.
+  const close = () => { if (!pending) onClose(); };
+
   const hint = existing
     ? "You already have this outfit."
     : count < MIN_OUTFIT_PIECES
@@ -148,7 +151,7 @@ export function OutfitBuilder({ items, outfits, onCreate, onOpen, onClose }) {
       : "The 360 view takes about a minute.";
 
   return (
-    <SidePanel label="New outfit" onClose={onClose}>
+    <SidePanel label="New outfit" onClose={close}>
       <div className="spin-hero outfit-preview">
         {count ? <OutfitFlatLay pieces={pieces} /> : <p className="turnaround-status">Pick the pieces below</p>}
       </div>

@@ -2,7 +2,8 @@ import { OUTFIT_SLOTS } from "../shared/outfit-slots.mjs";
 
 const LABELS = { upperbody: "Top", wholebody_up: "Jacket", lowerbody: "Bottom", accessories_up: "Accessory", shoes: "Shoes" };
 const escape = (value) => String(value).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
-const meta = (html, attribute, name, content) => html.replace(new RegExp(`<meta ${attribute}="${name}" content="[^"]*" />`), `<meta ${attribute}="${name}" content="${escape(content)}" />`);
+// Names go in through replacer functions. In a replacement string, a name with `$&` or `$'` in it would paste parts of the page.
+const meta = (html, attribute, name, content) => html.replace(new RegExp(`<meta ${attribute}="${name}" content="[^"]*" />`), () => `<meta ${attribute}="${name}" content="${escape(content)}" />`);
 const frontFrame = (record) => record.turnaround?.status === "ready" ? record.turnaround.frames?.[0] : null;
 
 export function pieceCard(piece) {
@@ -37,13 +38,13 @@ export function outfitCard(outfit, records) {
 export function applyCard(html, origin, card) {
   const link = `${origin}/?${card.query}`;
   const image = card.image ? `${origin}${card.image}` : null;
-  let page = html.replace(/<title>[^<]*<\/title>/, `<title>${escape(card.title)} \u00b7 Drip</title>`);
+  let page = html.replace(/<title>[^<]*<\/title>/, () => `<title>${escape(card.title)} \u00b7 Drip</title>`);
   page = meta(page, "name", "description", card.description);
   page = meta(page, "property", "og:title", card.title);
   page = meta(page, "property", "og:description", card.description);
   page = meta(page, "name", "twitter:title", card.title);
   page = meta(page, "name", "twitter:description", card.description);
-  return page.replace("<meta name=\"twitter:card\" content=\"summary\" />", [
+  return page.replace("<meta name=\"twitter:card\" content=\"summary\" />", () => [
     `<meta name="twitter:card" content="${image ? "summary_large_image" : "summary"}" />`,
     `<meta property="og:url" content="${escape(link)}" />`,
     ...(image ? [
