@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, Plus, SpinnerGap, Trash, X } from "@phosphor-icons/react";
-import { MIN_OUTFIT_PIECES, OUTFIT_SLOTS, outfitKey } from "../shared/outfit-slots.mjs";
+import { MIN_OUTFIT_PIECES, OUTFIT_SLOTS, isOuterwear, outfitKey } from "../shared/outfit-slots.mjs";
 import { SpinHero, TurnaroundPanel } from "./spin.jsx";
 
 // Slot id to the piece in it. A piece that has left the wardrobe drops out.
@@ -122,7 +122,7 @@ export function OutfitBuilder({ items, outfits, onCreate, onOpen, onClose }) {
     });
   };
 
-  // The jacket slot offers tops too, and one piece cannot be worn twice.
+  // A hoodie fits the top slot and the jacket slot, and one piece cannot be worn twice.
   const wornElsewhere = (slotId, itemId) => Object.entries(selection).some(([otherSlot, id]) => otherSlot !== slotId && id === itemId);
 
   const submit = async (event) => {
@@ -159,8 +159,8 @@ export function OutfitBuilder({ items, outfits, onCreate, onOpen, onClose }) {
         <h2 className="outfit-heading">New outfit</h2>
         {OUTFIT_SLOTS.map((slot) => {
           const candidates = items
-            .filter((item) => slot.parts.includes(item.part))
-            .sort((a, b) => slot.parts.indexOf(a.part) - slot.parts.indexOf(b.part) || a.id.localeCompare(b.id));
+            .filter(slot.fits)
+            .sort((a, b) => Number(isOuterwear(b)) - Number(isOuterwear(a)) || a.id.localeCompare(b.id));
           return (
             <div key={slot.id} className="outfit-slot" role="group" aria-label={slot.label}>
               <div className="outfit-slot__head">
