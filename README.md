@@ -2,7 +2,7 @@
 
 # WarDrip
 
-A personal wardrobe gallery. Photograph a piece, get a clean cutout and a 360 spin of it on you.
+A personal wardrobe gallery. Photograph a piece, get a clean cutout and a 360 spin of it on you. Then mix pieces into outfits and see the whole look.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-191919?style=flat-square)](LICENSE)
 [![Node 22+](https://img.shields.io/badge/node-22%2B-191919?style=flat-square)](package.json)
@@ -20,15 +20,16 @@ A personal wardrobe gallery. Photograph a piece, get a clean cutout and a 360 sp
 - Takes several photos of one piece as angles of the same garment
 - Generates an eight view 360 spin of you wearing the piece, with a generic face in place of yours. Drag or use the arrow keys to turn it
 - Draws a different reference photo of you from a pool for every generation, so the look varies between pieces and regenerations
-- Searches the gallery by name, detail or category with typo tolerance, and keeps the search, category and open piece in the URL so a link opens the same view
-- Shows visitors a read-only gallery. Editing, importing, regenerating and deleting need the import secret
+- Builds outfits from the pieces you own. Pick a top, jacket, bottom, accessory and shoes, and get one 360 spin of you wearing all of them
+- Searches the gallery by name, detail or category with typo tolerance, and keeps the search, category and open piece or outfit in the URL so a link opens the same view
+- Shows visitors a read-only gallery. Editing, importing, building outfits, regenerating and deleting need the import secret
 - Runs locally against a `data/` folder, or on Vercel with a private Blob store so you can import from your phone
 
 ## Quick start
 
 ```bash
-git clone https://github.com/chaodonghu/drip.git
-cd drip
+git clone https://github.com/chaodonghu/wardrip.git
+cd wardrip
 npm install
 cp .env.example .env
 npm run dev
@@ -50,11 +51,31 @@ Everything lives in `data/` when running locally: `library.json`, originals, job
 
 Generation runs on the server. Closing the import panel, or the tab, does not stop it. A step that needs your approval waits until you come back.
 
+## Outfits
+
+Open Outfits in the left rail and choose New outfit. Each slot takes one piece: top, jacket, bottom, accessory and shoes. The jacket slot also offers your tops, so a hoodie or an overshirt can go over a tee.
+
+- The preview lays the cutouts out as you pick, so trying combinations is instant and free.
+- Try it on generates one 360 spin of you wearing every piece you picked. It takes about a minute and keeps running on the server if you close the tab.
+- An outfit needs at least two pieces. Slots you leave empty are filled with plain basics.
+- A combination is saved once. Pick it again and the builder opens the outfit you already have.
+- Open an outfit to spin it, rename it, regenerate it, or jump to any of its pieces.
+- Deleting a piece deletes the outfits that use it.
+
+Locally, outfits are saved to `data/imported/outfits.json`, beside their frames.
+
+![Saved outfits in the gallery, next to the New outfit tile](docs/screenshots/outfits.png)
+
+<p align="center">
+  <img src="docs/screenshots/outfit-builder.png" alt="Outfit builder with a piece picked in every slot and the cutouts laid out above" width="380" />
+  <img src="docs/screenshots/outfit.png" alt="Saved outfit with its 360 spin and the pieces it is made of" width="380" />
+</p>
+
 ## Sharing
 
-Anyone with the URL sees the gallery, the spins and each piece's name, category, colors and details, with nothing to click but Close. Filters live in the URL, so `/?type=shoes&q=pollex` opens that exact view for whoever receives it. Opening a piece adds `piece=<id>` to the URL, and Copy link under the spin puts that link on the clipboard. On Vercel the link previews with the piece's name and cutout when pasted into a chat.
+Anyone with the URL sees the gallery, the outfits, the spins and each piece's name, category, colors and details, with nothing to click but Close. Filters live in the URL, so `/?type=shoes&q=pollex` opens that exact view for whoever receives it. Opening a piece adds `piece=<id>` to the URL, and Copy link under the spin puts that link on the clipboard. Outfits work the same way with `outfit=<id>`. On Vercel the link previews with the name and the front view of the spin when pasted into a chat.
 
-Editing is tied to the import secret. Open the import panel and enter it once, and that browser gets the editor back: name, category and color changes, detail tags, Regenerate on the spin, and Delete. Clear the secret, or get it wrong, and the view returns to read-only.
+Editing is tied to the import secret. Open the import panel and enter it once, and that browser gets the editor back: name, category and color changes, detail tags, the outfit builder, Regenerate on the spin, and Delete. Clear the secret, or get it wrong, and the view returns to read-only.
 
 ## Configuration
 
@@ -63,6 +84,7 @@ Editing is tied to the import secret. Open the import panel and enter it once, a
 | `OPENAI_API_KEY` | Required |
 | `OPENAI_VISION_MODEL` | `gpt-6.1-sol`. Detection and the image tool host |
 | `OPENAI_IMAGE_MODEL` | `gpt-image-2.6-sunburst`. Cutouts and spins |
+| `OPENAI_OUTFIT_MODEL` | `gpt-image-2.6-flare`. Outfit spins. Follows `OPENAI_IMAGE_MODEL` when that is set |
 | `OPENAI_IMAGE_QUALITY` | `high` |
 | `WARDROBE_MODEL_REFERENCE` | `data/model-reference.png`. Fallback when `data/models/` is empty |
 | `WARDROBE_DATA_DIR` | `data` |
@@ -70,7 +92,7 @@ Editing is tied to the import secret. Open the import panel and enter it once, a
 | `WARDROBE_STORAGE` | Unset, which uses `data/`. Set `blob` to use Vercel Blob |
 | `BLOB_READ_WRITE_TOKEN` | Written to `.env.local` by `vercel env pull` |
 
-Other OpenAI models work by setting the two model variables. `gpt-image-2.6-flare` is the faster, cheaper image option, and `gpt-6.1-terra` is the cheaper text option.
+Other OpenAI models work by setting the two model variables. `gpt-image-2.6-flare` is the faster image option at the same price, and `gpt-6.1-terra` is the cheaper text option.
 
 ## Deploy to Vercel
 
@@ -104,7 +126,7 @@ The hosted app runs the import API as one Vercel function and keeps the library,
    npm run publish-data
    ```
 
-   The script resizes every model photo to 2048 px on the long edge before it uploads. It also replaces the hosted `library.json` with your local copy, so run it before you import from the hosted app, and again after you add or change model photos.
+   The script resizes every model photo to 2048 px on the long edge before it uploads. It also replaces the hosted `library.json` with your local copy, so run it before you import from the hosted app, and again after you add or change model photos. Outfits built locally are published with it.
 
 5. Connect the project to the GitHub repo so every merge to `main` deploys to production and every pull request gets a preview URL.
 
@@ -116,13 +138,13 @@ The hosted app runs the import API as one Vercel function and keeps the library,
 
 6. Open the deployed app on your phone, open the import panel, and enter the import secret. The browser remembers it, and until it has one the app stays read-only.
 
-Code ships through Git. Data does not: imports made in the hosted app land in Blob directly, and `npm run publish-data` is only needed when you add model photos or import pieces locally and want them hosted. It replaces the hosted library with the local one.
+Code ships through Git. Data does not: imports and outfits made in the hosted app land in Blob directly, and `npm run publish-data` is only needed when you add model photos or import pieces locally and want them hosted. It replaces the hosted library with the local one.
 
 Vercel stops a function after 300 seconds. If a generation step runs out of time, the job shows "Generation timed out. Try regenerating." six minutes after the step started.
 
 ## Import with Codex
 
-The repo also bundles two Codex skills. One imports clothes from a folder and generates modeled photos; the other styles complete outfits into a modeled lookbook.
+The repo also bundles two Codex skills. One imports clothes from a folder and generates modeled photos; the other styles complete outfits into a modeled lookbook. The lookbook is separate from the outfits in the app: it writes square photos to `data/outfit-images/`, and the app does not show them.
 
 ```text
 $import-clothes Import the clothes from ~/Pictures/outfits, create modeled photos, and add them to this wardrobe.
@@ -133,7 +155,7 @@ Open the repo in Codex and run either prompt. The skills live in [`.agents/skill
 
 ## Credits
 
-Wardrobe started from [tandpfun/wardrobe](https://github.com/tandpfun/wardrobe) by [Thijs Simonian](https://thijs.net), which introduced the detect, cut out, and model pipeline and the gallery design. See [the original post](https://x.com/cdngdev/status/2076812846793650485). This repo keeps that idea and adds Vercel hosting, phone imports, multi-angle pieces, and the 360 spin.
+Wardrobe started from [tandpfun/wardrobe](https://github.com/tandpfun/wardrobe) by [Thijs Simonian](https://thijs.net), which introduced the detect, cut out, and model pipeline and the gallery design. See [the original post](https://x.com/cdngdev/status/2076812846793650485). This repo keeps that idea and adds Vercel hosting, phone imports, multi-angle pieces, the 360 spin, and outfits.
 
 ## License
 
