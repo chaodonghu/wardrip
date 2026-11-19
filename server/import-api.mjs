@@ -525,6 +525,9 @@ export function createImportApi({ storage, setting, background }) {
   const running = new Map();
   const apiBaseUrl = () => setting("OPENAI_API_BASE_URL", "https://api.openai.com/v1").replace(/\/$/, "");
   const importSecret = () => setting("WARDROBE_IMPORT_SECRET").trim();
+  // A hosted deploy without a secret would let anyone with its URL spend the OpenAI key or edit and delete the library.
+  // Preview deployments are the usual case: they share the Blob store, and the secret is only set for production.
+  const unprotected = () => Boolean(process.env.VERCEL) && !importSecret();
 
   // Every full-body photo under models/ is a candidate. The single model-reference.png stays as the fallback.
   async function listModels() {
@@ -546,9 +549,9 @@ export function createImportApi({ storage, setting, background }) {
   async function setupStatus() {
     const hasApiKey = Boolean(setting("OPENAI_API_KEY").trim());
     const hasModelReference = (await listModels()).length > 0;
-    const requiresSecret = Boolean(importSecret());
-    // A hosted deploy without a secret would let anyone spend the OpenAI key.
-    const missingSecret = Boolean(process.env.VERCEL) && !requiresSecret;
+    const missingSecret = unprotected();
+    // An unprotected deploy is read-only, so the client treats it like one whose secret it does not have.
+    const requiresSecret = Boolean(importSecret()) || missingSecret;
     const missing = [
       !hasApiKey && "OPENAI_API_KEY in .env",
       !hasModelReference && `full-body photos of yourself under ${storage.modelReference}`,
@@ -917,6 +920,7 @@ export function createImportApi({ storage, setting, background }) {
     if (!url.pathname.startsWith("/api/import/")) return json(404, { error: "Not found" });
     try {
       const secret = importSecret();
+      if (request.method !== "GET" && unprotected()) return json(503, { error: "This deployment has no WARDROBE_IMPORT_SECRET, so it is read-only." });
       if (secret && request.method !== "GET") {
         const header = request.headers.get("authorization") || "";
         if (!header.startsWith("Bearer ") || !sameSecret(header.slice("Bearer ".length), secret)) {
