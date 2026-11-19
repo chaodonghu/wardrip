@@ -22,6 +22,45 @@ function OutfitFlatLay({ pieces }) {
   );
 }
 
+// What a piece is shown in. Its own spin dresses it from the wardrobe, and every saved outfit it is part of is another
+// look. `shown` is the outfit look on display, or null for the piece's own spin.
+export function PieceLooks({ own, looks, shown, wornWith, onPick, onOpenPiece, onOpenOutfit }) {
+  if (!looks.length && !wornWith.length) return null;
+  const ownFront = own?.frames?.[0];
+  return (
+    <section className="piece-looks" aria-label="Looks for this piece">
+      {looks.length > 0 && (
+        <div className="piece-looks__row">
+          <span>Looks</span>
+          <div className="piece-looks__choices">
+            <button type="button" className={shown ? "" : "active"} aria-pressed={!shown} aria-label="Styled from the wardrobe" title="Styled from the wardrobe" onClick={() => onPick(null)}>
+              {ownFront ? <img src={ownFront} alt="" /> : <i aria-hidden="true" />}
+            </button>
+            {looks.map(({ outfit }) => (
+              <button key={outfit.id} type="button" className={shown?.outfit.id === outfit.id ? "active" : ""} aria-pressed={shown?.outfit.id === outfit.id} aria-label={outfit.name} title={outfit.name} onClick={() => onPick(outfit.id)}>
+                <img src={outfit.turnaround.frames[0]} alt="" loading="lazy" />
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+      {wornWith.length > 0 && (
+        <div className="piece-looks__row">
+          <span>Worn with</span>
+          <div className="piece-looks__choices">
+            {wornWith.map((piece) => (
+              <button key={piece.id} type="button" aria-label={`View ${piece.name}`} title={piece.name} onClick={() => onOpenPiece(piece.id)}>
+                <img src={piece.thumbnail || piece.image} alt="" loading="lazy" />
+              </button>
+            ))}
+          </div>
+          {shown && <button type="button" className="turnaround-action" onClick={() => onOpenOutfit(shown.outfit.id)}>{shown.outfit.name}</button>}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function OutfitCard({ outfit, pieces, selected, onOpen }) {
   const front = outfit.turnaround?.frames?.[0];
   return (

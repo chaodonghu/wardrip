@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Check, MagnifyingGlass, Plus, SpinnerGap, Trash, X } from "@phosphor-icons/react";
 import { importAuthHeaders, SECRET_CHANGE_EVENT, storedSecret, WardrobeImportFlow } from "./import-flow.jsx";
 import { OptimizedImage } from "./OptimizedImage.jsx";
-import { OutfitBuilder, OutfitGallery, OutfitViewer, outfitPieces } from "./outfits.jsx";
+import { OutfitBuilder, OutfitGallery, OutfitViewer, PieceLooks, outfitPieces } from "./outfits.jsx";
 import { SpinHero, TurnaroundPanel } from "./spin.jsx";
 import { MIN_OUTFIT_PIECES } from "../shared/outfit-slots.mjs";
 
@@ -396,7 +396,7 @@ function ItemEditor({ draft, setDraft, palette, sampling, setSampling, sampleSta
   );
 }
 
-function ItemViewer({ item, outfitCount, onClose, onSave, onDelete, onGenerateTurnaround, onCopyLink, canEdit }) {
+function ItemViewer({ item, outfits, itemsById, onClose, onSave, onDelete, onGenerateTurnaround, onCopyLink, onOpenPiece, onOpenOutfit, canEdit }) {
   const closeButtonRef = useRef(null);
   const imageRef = useRef(null);
   const samplingCanvasRef = useRef(null);
@@ -407,7 +407,13 @@ function ItemViewer({ item, outfitCount, onClose, onSave, onDelete, onGenerateTu
   const [draft, setDraft] = useState({ name: item.name || "", part: item.part, color: item.color || "#9a9286", secondaryColor: item.secondaryColor || null, tags: [...(item.tags || [])] });
   const [shaking, setShaking] = useState(false);
   const [closeBlocked, setCloseBlocked] = useState(false);
+  const [lookId, setLookId] = useState(null);
   const type = TYPE_MAP[item.part]?.singular || "Wardrobe item";
+  const outfitCount = outfits.length;
+  // The piece's own spin dresses it from the wardrobe. A saved outfit it is part of can stand in for that spin.
+  const looks = outfits.filter(({ outfit }) => outfit.turnaround?.frames?.length);
+  const shown = looks.find(({ outfit }) => outfit.id === lookId) || null;
+  const wornWith = Object.values(shown ? shown.pieces : outfitPieces(item.turnaround?.styledWith || {}, itemsById)).filter((piece) => piece.id !== item.id);
 
   const isDirty = useMemo(() => {
     const normalizedTags = (tags) => tags.map((tag) => tag.trim()).filter(Boolean);
@@ -441,6 +447,9 @@ function ItemViewer({ item, outfitCount, onClose, onSave, onDelete, onGenerateTu
     else onClose();
   }, [isDirty, nudgeUnsaved, onClose]);
 
+  // Leaving for another piece or an outfit drops the draft the same way closing does.
+  const leave = (go) => { if (isDirty) nudgeUnsaved(); else go(); };
+
   useEffect(() => {
     document.body.classList.add("viewer-open");
     closeButtonRef.current?.focus({ preventScroll: true });
@@ -468,6 +477,7 @@ function ItemViewer({ item, outfitCount, onClose, onSave, onDelete, onGenerateTu
 
   // Depends on the id only, so a polled turnaround update keeps unsaved edits.
   useEffect(() => {
+    setLookId(null);
     setSampling(null);
     setSampleStatus("");
     setPalette(item.palette || []);
@@ -542,12 +552,22 @@ function ItemViewer({ item, outfitCount, onClose, onSave, onDelete, onGenerateTu
       </button>
 
       <SpinHero
-        turnaround={item.turnaround}
-        label={`${draft.name || type} 360 view`}
+        turnaround={shown ? shown.outfit.turnaround : item.turnaround}
+        label={`${draft.name || type} 360 view${shown ? `, in ${shown.outfit.name}` : ""}`}
         replacement={sampling ? garmentArtwork : null}
       />
 
-      <TurnaroundPanel turnaround={item.turnaround} onGenerate={() => onGenerateTurnaround(item.id)} onCopyLink={() => onCopyLink(item.id)} canEdit={canEdit} />
+      <TurnaroundPanel turnaround={item.turnaround} onGenerate={() => { setLookId(null); return onGenerateTurnaround(item.id); }} onCopyLink={() => onCopyLink(item.id)} canEdit={canEdit} />
+
+      <PieceLooks
+        own={item.turnaround}
+        looks={looks}
+        shown={shown}
+        wornWith={wornWith}
+        onPick={setLookId}
+        onOpenPiece={(id) => leave(() => onOpenPiece(id))}
+        onOpenOutfit={(id) => leave(() => onOpenOutfit(id))}
+      />
 
       {!canEdit && (
         <div className="viewer-details">
@@ -683,6 +703,9 @@ export function App() {
   const selectedOutfit = outfits.find((outfit) => outfit.id === selectedOutfitId) || null;
   const itemsById = useMemo(() => new Map(items.map((item) => [item.id, item])), [items]);
   const canBuild = canEdit && items.length >= MIN_OUTFIT_PIECES;
+  const selectedItemOutfits = useMemo(() => (selectedItem
+    ? outfits.filter((outfit) => Object.values(outfit.pieces).includes(selectedItem.id)).map((outfit) => ({ outfit, pieces: outfitPieces(outfit.pieces, itemsById) }))
+    : []), [selectedItem, outfits, itemsById]);
 
   useEffect(() => { writeViewToUrl({ type: activeType, query, piece: selectedId, outfit: selectedOutfitId }); }, [activeType, query, selectedId, selectedOutfitId]);
 
@@ -902,7 +925,7 @@ export function App() {
       </main>
 
       {toast && <div className="toast" role="status" key={toast.key}>{toast.text}</div>}
-      {selectedItem && <ItemViewer item={selectedItem} outfitCount={outfits.filter((outfit) => Object.values(outfit.pieces).includes(selectedItem.id)).length} onClose={() => setSelectedId(null)} onSave={saveItem} onDelete={deleteItem} onGenerateTurnaround={generateTurnaround} onCopyLink={copyLink} canEdit={canEdit} />}
+      {selectedItem && <ItemViewer item={selectedItem} outfits={selectedItemOutfits} itemsById={itemsById} onClose={() => setSelectedId(null)} onSave={saveItem} onDelete={deleteItem} onGenerateTurnaround={generateTurnaround} onCopyLink={copyLink} onOpenPiece={setSelectedId} onOpenOutfit={(id) => { setSelectedId(null); setSelectedOutfitId(id); }} canEdit={canEdit} />}
       {/* A piece opened from an outfit sits on top of it, so closing the piece returns to the outfit. */}
       {!selectedItem && selectedOutfit && <OutfitViewer outfit={selectedOutfit} pieces={outfitPieces(selectedOutfit.pieces, itemsById)} canEdit={canEdit} onClose={() => setSelectedOutfitId(null)} onGenerate={generateTurnaround} onCopyLink={copyLink} onRename={renameOutfit} onDelete={deleteOutfit} onOpenPiece={setSelectedId} />}
       {!selectedItem && !selectedOutfit && building && <OutfitBuilder items={items} outfits={outfits} onCreate={createOutfit} onOpen={(id) => { setBuilding(false); setSelectedOutfitId(id); }} onClose={() => setBuilding(false)} />}
