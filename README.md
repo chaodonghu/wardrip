@@ -53,7 +53,7 @@ Generation runs on the server. Closing the import panel, or the tab, does not st
 
 ## Outfits
 
-Open Outfits in the left rail and choose New outfit. Each slot takes one piece: top, jacket, bottom, accessory and shoes. The jacket slot also offers your tops, so a hoodie or an overshirt can go over a tee.
+Open Outfits in the left rail and choose New outfit. Each slot takes one piece: top, jacket, bottom, accessory and shoes. The jacket slot takes jackets and the tops that layer, so a hoodie or an overshirt can go over a tee. A T-shirt only goes in the top slot, and a jacket only in the jacket slot, whichever category it is filed under.
 
 - The preview lays the cutouts out as you pick, so trying combinations is instant and free.
 - Try it on generates one 360 spin of you wearing every piece you picked. It takes about a minute and keeps running on the server if you close the tab.
