@@ -11,7 +11,7 @@ A personal wardrobe gallery. Photograph a piece, get a clean cutout and a 360 sp
 
 ![Drip gallery with twelve pieces, categories and search in a left rail](docs/screenshots/gallery.png)
 
-![Item viewer with the 360 spin](docs/screenshots/editor.png)
+![Item viewer with the 360 spin, the looks the piece is part of and the pieces it is worn with](docs/screenshots/editor.png)
 
 ## What it does
 
@@ -20,6 +20,7 @@ A personal wardrobe gallery. Photograph a piece, get a clean cutout and a 360 sp
 - Takes several photos of one piece as angles of the same garment
 - Generates an eight view 360 spin of you wearing the piece, with a generic face in place of yours. Drag or use the arrow keys to turn it
 - Draws a different reference photo of you from a pool for every generation, so the look varies between pieces and regenerations
+- Dresses the rest of you from your own wardrobe in every spin, borrowing pairings from your saved outfits, and picks a different look each time you regenerate
 - Builds outfits from the pieces you own. Pick a top, jacket, bottom, accessory and shoes, and get one 360 spin of you wearing all of them
 - Searches the gallery by name, detail or category with typo tolerance, and keeps the search, category and open piece or outfit in the URL so a link opens the same view
 - Shows visitors a read-only gallery. Editing, importing, building outfits, regenerating and deleting need the import secret
@@ -50,6 +51,17 @@ Open the import panel and choose one or more photos.
 Everything lives in `data/` when running locally: `library.json`, originals, jobs, and generated images.
 
 Generation runs on the server. Closing the import panel, or the tab, does not stop it. A step that needs your approval waits until you come back.
+
+## Looks
+
+A piece is never shown on its own. Its spin dresses you in the piece plus a top, a bottom and shoes from the rest of the wardrobe, whichever of those the piece is not. A jacket gets a top under it. When you have saved outfits, one of them often lends its pairing. Otherwise the pieces are picked at random.
+
+- Worn with, under the spin, shows the pieces that were picked. Click one to open it.
+- Regenerate picks a different look.
+- A new upload gets its look the moment its cutout is approved.
+- Every saved outfit the piece is part of is listed under Looks, next to its own spin. Pick one to see the piece in that outfit. Nothing is generated for this.
+
+With a single piece in the wardrobe there is nothing to pick from, and the spin keeps whatever your reference photo wears.
 
 ## Outfits
 

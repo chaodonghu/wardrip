@@ -1306,3 +1306,78 @@ button { font: inherit; }
   .outfit-new,
   .outfit-choices button { transition: none; }
 }
+
+.piece-looks {
+  flex: 0 0 auto;
+  display: grid;
+  gap: 10px;
+  padding: 16px 34px 4px;
+}
+.piece-looks__row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.piece-looks__row > span {
+  flex: 0 0 78px;
+  color: var(--muted);
+  white-space: nowrap;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+}
+.piece-looks__choices {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.piece-looks__choices button {
+  width: 40px;
+  height: 50px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line);
+  padding: 3px;
+  background: transparent;
+  cursor: pointer;
+  transition: border-color 160ms ease;
+}
+.piece-looks__choices img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.piece-looks__choices i {
+  width: 12px;
+  height: 1px;
+  background: var(--line);
+}
+.piece-looks__choices button:hover,
+.piece-looks__choices button:focus-visible { border-color: var(--ink); outline: none; }
+.piece-looks__choices button.active {
+  border-color: var(--ink);
+  box-shadow: inset 0 0 0 1px var(--ink);
+}
+.piece-looks__row > .turnaround-action {
+  flex: none;
+  margin-left: auto;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 1180px) {
+  .piece-looks { padding-inline: 30px; }
+}
+
+@media (max-width: 520px) {
+  .piece-looks { padding-inline: 22px; }
+  .piece-looks__row > span { flex-basis: 72px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .piece-looks__choices button { transition: none; }
+}

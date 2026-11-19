@@ -210,6 +210,28 @@ function outfitSelection(input, records) {
   return pieces;
 }
 
+// The slots a spin fills in around a single piece, so the person is dressed from the wardrobe.
+const LOOK_SLOTS = ["top", "bottom", "shoes"];
+const slotOf = (piece) => OUTFIT_SLOTS.find((slot) => slot.fits(piece))?.id;
+
+// The pieces worn around one piece in its spin. A saved outfit lends its pairing for the open slots when it has one,
+// the wardrobe fills the rest at random, and the look differs from the previous one whenever there is a choice.
+export function completeLook(piece, pieces, outfits, { previous = {}, random = Math.random } = {}) {
+  const own = slotOf(piece);
+  const pick = (list) => list[Math.floor(random() * list.length)];
+  const options = LOOK_SLOTS.filter((slotId) => slotId !== own).map((slotId) => {
+    const slot = OUTFIT_SLOTS.find((candidate) => candidate.id === slotId);
+    return [slotId, pieces.filter((record) => record.id !== piece.id && slot.fits(record))];
+  }).filter(([, fitting]) => fitting.length);
+  const draw = () => {
+    const lender = pick([...outfits, null])?.pieces || {};
+    return Object.fromEntries(options.map(([slotId, fitting]) => [slotId, (fitting.find((record) => record.id === lender[slotId]) || pick(fitting)).id]));
+  };
+  let look = draw();
+  for (let attempt = 0; attempt < 8 && outfitKey(look) === outfitKey(previous); attempt += 1) look = draw();
+  return look;
+}
+
 function nextOutfitName(outfits) {
   const numbers = outfits.map((outfit) => Number(outfit.name?.match(/^Outfit (\d+)$/)?.[1])).filter(Number.isFinite);
   return `Outfit ${Math.max(0, ...numbers) + 1}`;
@@ -498,6 +520,8 @@ async function openAIFetch(url, options) {
 
 const MODERATION_BLOCKED = "moderation_blocked";
 // The block message from the image call talks about one piece in the import queue, which an outfit is not.
+// A piece styled from the wardrobe can be blocked by any piece in the look, and the next look is a different one.
+const LOOK_BLOCKED = "Blocked by OpenAI. Its safety filter would not draw this look, which can come from any piece in it. Try again to style it with different pieces.";
 const OUTFIT_BLOCKED = "Blocked by OpenAI. Its safety filter will not draw this outfit, most likely because one piece looks like a protected character or brand. Retrying will not help, so build the outfit without that piece.";
 
 function imageFailure(response) {
@@ -778,12 +802,19 @@ export function createImportApi({ storage, setting, background }) {
     return task;
   }
 
-  // A spin shows one piece, or every piece of an outfit. Either way the garments follow the model photo in the request.
+  // A spin shows a piece in the look planned for it, or every piece of an outfit. Either way the garments follow the
+  // model photo in the request.
   async function turnaroundSubject(id) {
     const pieces = await loadImported();
     if (!isOutfitId(id)) {
       const piece = pieces.find((item) => item.id === id);
-      return { garmentIds: [id], chromaKey: chooseChromaKey(piece?.color), prompt: (chromaKey) => turnaroundPrompt(chromaKey, piece), imageModel: setting("OPENAI_MODELED_MODEL", setting("OPENAI_IMAGE_MODEL", "gpt-image-2.6-sunburst")) };
+      const imageModel = setting("OPENAI_MODELED_MODEL", setting("OPENAI_IMAGE_MODEL", "gpt-image-2.6-sunburst"));
+      const slot = piece && slotOf(piece);
+      const entries = slot ? outfitEntries({ ...piece.turnaround?.styledWith, [slot]: id }, pieces) : [];
+      // With nothing to wear it with, the piece is drawn on whatever the reference photo wears.
+      if (entries.length < 2) return { garmentIds: [id], chromaKey: chooseChromaKey(piece?.color), prompt: (chromaKey) => turnaroundPrompt(chromaKey, piece), imageModel };
+      const styledWith = Object.fromEntries(entries.filter((entry) => entry.record.id !== id).map((entry) => [entry.slot, entry.record.id]));
+      return { garmentIds: entries.map((entry) => entry.record.id), chromaKey: chooseChromaKey(...entries.map((entry) => entry.record.color)), prompt: (chromaKey) => outfitPrompt(chromaKey, entries), imageModel, styledWith };
     }
     const outfit = (await loadOutfits()).find((record) => record.id === id);
     const entries = outfitEntries(outfit?.pieces, pieces);
@@ -796,11 +827,13 @@ export function createImportApi({ storage, setting, background }) {
     const lock = `turnaround:${itemId}`;
     if (running.has(lock)) return running.get(lock);
     const task = (async () => {
+      let styled = false;
       try {
         const key = setting("OPENAI_API_KEY");
         if (!key) throw new Error("OPENAI_API_KEY is not configured");
         const model = await pickModel();
-        const { garmentIds, chromaKey, prompt, imageModel } = await turnaroundSubject(itemId);
+        const { garmentIds, chromaKey, prompt, imageModel, styledWith } = await turnaroundSubject(itemId);
+        styled = Boolean(styledWith);
         const garments = await Promise.all(garmentIds.map(async (id) => ({ data: await requireBytes(`library/${id}-garment.png`), mime: "image/png", name: `${id}-garment.png` })));
         const sheet = await openAIEdit({ key, baseUrl: apiBaseUrl(), responseModel: setting("OPENAI_IMAGE_TOOL_MODEL", setting("OPENAI_VISION_MODEL", "gpt-6.1-sol")), imageModel, quality: setting("OPENAI_IMAGE_QUALITY", "high"), size: "1536x1024", images: [{ data: model.data, mime: "image/png", name: "model.png" }, ...garments], prompt: prompt(chromaKey) });
         const keyed = await Promise.all((await sliceTurnaround(sheet)).map(async (frame) => (await processChromaBackground(frame, chromaKey, { frame: false })).bytes));
@@ -814,19 +847,31 @@ export function createImportApi({ storage, setting, background }) {
           frames: frameNames.map((name) => `${LIBRARY_ASSET_ROOT}/${name}${version}`),
           sheet: `${LIBRARY_ASSET_ROOT}/${sheetName}${version}`,
           modelReference: model.key,
+          ...(styledWith && { styledWith }),
         }) }));
         if (!record) await Promise.all(names.map((name) => storage.remove(`library/${name}`)));
       } catch (error) {
-        const message = error.code === MODERATION_BLOCKED && isOutfitId(itemId) ? OUTFIT_BLOCKED : error.message;
-        await patchRecord(itemId, () => ({ turnaround: turnaroundState("failed", { error: message, errorCode: error.code || null }) }));
+        const blocked = error.code === MODERATION_BLOCKED;
+        const message = blocked && isOutfitId(itemId) ? OUTFIT_BLOCKED : blocked && styled ? LOOK_BLOCKED : error.message;
+        // The viewer offers no retry for a blocked spin. A blocked look gets one, since the retry draws other pieces.
+        await patchRecord(itemId, () => ({ turnaround: turnaroundState("failed", { error: message, errorCode: blocked && styled ? null : error.code || null }) }));
       }
     })().finally(() => running.delete(lock));
     running.set(lock, task);
     return task;
   }
 
+  // A piece is shown in a look. The look is settled when the spin starts and kept on the record, so the viewer can say
+  // what the piece is being styled with and the generation only has to read it.
+  async function planLook(itemId) {
+    const pieces = await loadImported();
+    const piece = pieces.find((item) => item.id === itemId);
+    return piece ? completeLook(piece, pieces, await loadOutfits(), { previous: piece.turnaround?.styledWith }) : null;
+  }
+
   async function startTurnaround(itemId) {
-    const record = await patchRecord(itemId, () => ({ turnaround: turnaroundState("processing") }));
+    const look = isOutfitId(itemId) ? null : await planLook(itemId);
+    const record = await patchRecord(itemId, () => ({ turnaround: turnaroundState("processing", look ? { styledWith: look } : {}) }));
     if (record) background(generateTurnaround(itemId));
     return record;
   }
