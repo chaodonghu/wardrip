@@ -2,11 +2,13 @@ import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import path from "node:path";
 import OpenAI from "openai";
 import sharp from "sharp";
+import { MIN_OUTFIT_PIECES, OUTFIT_SLOTS, outfitKey } from "../shared/outfit-slots.mjs";
 
 const API_ROOT = "/api/import/jobs";
 const ASSET_ROOT = "/api/import/assets";
 const LIBRARY_ASSET_ROOT = "/api/import/library";
 const LIBRARY_KEY = "library/library.json";
+const OUTFITS_KEY = "library/outfits.json";
 const MODEL_REFERENCE_KEY = "model-reference.png";
 const STAGES = new Set(["crop", "garment"]);
 const DECISIONS = new Set(["approve", "reject"]);
@@ -24,12 +26,38 @@ export function isHeadwear(record = {}) {
 }
 
 // The sheet is keyed like garments are, so the frames sit on whatever surface the viewer gives them.
+const sheetLayout = (chromaKey) => `Eight full-body views of the same person, same relaxed natural standing pose with arms at the sides, head level and a calm neutral expression, same lighting, same scale, evenly spaced at 45 degree steps: front, front-left, left, back-left, back, back-right, right, front-right. Arrange them in two rows of four on a perfectly flat, absolutely uniform solid ${chromaKey} chroma-key background, edge to edge, with thin even gaps of the same ${chromaKey} color between the views. No floor, no shadows, no dividing lines, no text or labels.`;
+const GENERIC_FACE = "Do not reproduce the person's face: give the figure a neutral, generic face with no resemblance to Image 1.";
 // The reference photos show the person in a hat, so the hair line stops it from leaking into every spin.
+const BARE_HEAD = "The person wears no hat or beanie; they have a medium-length flow haircut with natural dark hair.";
+const wornHeadwear = (image) => `The person wears the exact headwear from Image ${image} on their head in every view, brim forward, with natural dark hair showing beneath it; wear nothing else on the head.`;
+
 export const turnaroundPrompt = (chromaKey, record = {}) => {
-  const head = isHeadwear(record)
-    ? `The person wears the exact headwear from Image 2 on their head in every view, brim forward, with natural dark hair showing beneath it; wear nothing else on the head. The rest of the outfit is understated and neutral.`
-    : `The person wears no hat or beanie; they have a medium-length flow haircut with natural dark hair.`;
-  return `Create a photographic turnaround sheet of the person in Image 1 wearing the exact garment from Image 2. Eight full-body views of the same person, same relaxed natural standing pose with arms at the sides, head level and a calm neutral expression, same lighting, same scale, evenly spaced at 45 degree steps: front, front-left, left, back-left, back, back-right, right, front-right. Arrange them in two rows of four on a perfectly flat, absolutely uniform solid ${chromaKey} chroma-key background, edge to edge, with thin even gaps of the same ${chromaKey} color between the views. No floor, no shadows, no dividing lines, no text or labels. Use no ${chromaKey} anywhere on the person or the garment. Preserve the person's build, height, skin tone and proportions and every garment detail including the back of the garment. Do not reproduce the person's face: give the figure a neutral, generic face with no resemblance to Image 1. ${head}`;
+  const head = isHeadwear(record) ? `${wornHeadwear(2)} The rest of the outfit is understated and neutral.` : BARE_HEAD;
+  return `Create a photographic turnaround sheet of the person in Image 1 wearing the exact garment from Image 2. ${sheetLayout(chromaKey)} Use no ${chromaKey} anywhere on the person or the garment. Preserve the person's build, height, skin tone and proportions and every garment detail including the back of the garment. ${GENERIC_FACE} ${head}`;
+};
+
+const SLOT_WEAR = {
+  top: (record) => `the top (${record.name})`,
+  // A pullover in the jacket slot has no opening, and the model invents one unless told how to layer it.
+  jacket: (record, worn) => worn.top
+    ? `the outer layer (${record.name}), worn over the top. If it has a real full front zipper or buttons, wear it open so the top shows. If it is a pullover, keep it closed and let the top show only at the collar, cuffs or hem`
+    : `the outer layer (${record.name})`,
+  bottom: (record) => `the bottoms (${record.name})`,
+  accessory: (record) => isHeadwear(record) ? `the headwear (${record.name})` : `the accessory (${record.name}), worn the way it is normally worn`,
+  shoes: (record) => `the shoes (${record.name})`,
+};
+
+// Entries are in slot order, so garment N of the outfit is Image N + 1 of the request.
+export const outfitPrompt = (chromaKey, entries) => {
+  const worn = Object.fromEntries(entries.map((entry) => [entry.slot, entry.record]));
+  const garments = entries.map((entry, index) => `Image ${index + 2} is ${SLOT_WEAR[entry.slot](entry.record, worn)}.`).join(" ");
+  const basics = [!worn.top && "top", !worn.bottom && "bottoms", !worn.shoes && "shoes"].filter(Boolean);
+  const unreferenced = basics.length
+    ? `Fill in the missing ${basics.join(", ").replace(/, ([^,]+)$/, " and $1")} with plain, understated, neutral basics, and add nothing else that is visible: no other clothing, bag, jewelry or accessory.`
+    : "Nothing else is visible: no other clothing, bag, jewelry or accessory.";
+  const hat = entries.findIndex((entry) => entry.slot === "accessory" && isHeadwear(entry.record));
+  return `Create a photographic turnaround sheet of the person in Image 1 wearing one outfit made of these exact garments. ${garments} The person wears all of them together. ${unreferenced} ${sheetLayout(chromaKey)} Use no ${chromaKey} anywhere on the person or the garments. Preserve the person's build, height, skin tone and proportions. Preserve every garment exactly as referenced: color, material, fit, logos, graphics and text, including the back of each garment, and keep each garment's real closure; never invent a zipper, buttons or an opening. ${GENERIC_FACE} ${hat === -1 ? BARE_HEAD : wornHeadwear(hat + 2)}`;
 };
 
 const jobKey = (id, name) => `jobs/${id}/${name}`;
@@ -143,15 +171,48 @@ async function cropDetectedItem(bytes, boundingBox) {
   return sharp(normalized).extract({ left, top, width: Math.max(1, right - left), height: Math.max(1, bottom - top) }).png().toBuffer();
 }
 
-function chooseChromaKey(primary = "#808080") {
-  const value = HEX_COLOR.test(primary) ? primary : "#808080";
-  const source = [1, 3, 5].map((offset) => Number.parseInt(value.slice(offset, offset + 2), 16));
+// The key sits as far as it can from the nearest garment color it has to be cut away from.
+function chooseChromaKey(...colors) {
+  const valid = colors.filter((color) => HEX_COLOR.test(color));
+  const sources = (valid.length ? valid : ["#808080"]).map((color) => [1, 3, 5].map((offset) => Number.parseInt(color.slice(offset, offset + 2), 16)));
   const candidates = [[0, 255, 0], [255, 0, 255], [0, 255, 255]];
-  const selected = candidates.sort((a, b) => {
-    const distance = (color) => color.reduce((total, channel, index) => total + ((channel - source[index]) ** 2), 0);
-    return distance(b) - distance(a);
-  })[0];
+  const clearance = (candidate) => Math.min(...sources.map((source) => candidate.reduce((total, channel, index) => total + ((channel - source[index]) ** 2), 0)));
+  const selected = candidates.sort((a, b) => clearance(b) - clearance(a))[0];
   return `#${selected.map((channel) => channel.toString(16).padStart(2, "0")).join("")}`;
+}
+
+const isOutfitId = (id) => id.startsWith("outfit-");
+const outfitName = (value) => typeof value === "string" ? value.replace(/\s+/g, " ").trim().slice(0, 80) : "";
+
+// Pieces that have left the wardrobe drop out, so an outfit never points at a missing cutout.
+function outfitEntries(pieces = {}, records) {
+  return OUTFIT_SLOTS.flatMap((slot) => {
+    const record = records.find((item) => item.id === pieces[slot.id]);
+    return record ? [{ slot: slot.id, record }] : [];
+  });
+}
+
+// Keeps the known slots only and refuses what the builder would not let through.
+function outfitSelection(input, records) {
+  const chosen = input && typeof input === "object" && !Array.isArray(input) ? input : {};
+  const invalid = (message) => Object.assign(new Error(message), { status: 400 });
+  const pieces = {};
+  for (const slot of OUTFIT_SLOTS) {
+    const id = chosen[slot.id];
+    if (!id) continue;
+    const record = records.find((item) => item.id === id);
+    if (!record) throw invalid(`The ${slot.id} slot holds a piece that is not in the wardrobe.`);
+    if (!slot.parts.includes(record.part)) throw invalid(`${record.name} does not fit the ${slot.id} slot.`);
+    if (Object.values(pieces).includes(id)) throw invalid(`${record.name} is in the outfit twice.`);
+    pieces[slot.id] = id;
+  }
+  if (Object.keys(pieces).length < MIN_OUTFIT_PIECES) throw invalid(`An outfit needs at least ${MIN_OUTFIT_PIECES} pieces.`);
+  return pieces;
+}
+
+function nextOutfitName(outfits) {
+  const numbers = outfits.map((outfit) => Number(outfit.name?.match(/^Outfit (\d+)$/)?.[1])).filter(Number.isFinite);
+  return `Outfit ${Math.max(0, ...numbers) + 1}`;
 }
 
 // Lookups sometimes append notes in brackets or a colorway after a dash. The name keeps only the product title.
@@ -580,16 +641,29 @@ export function createImportApi({ storage, setting, background }) {
     return bytes;
   }
 
-  const loadImported = async () => (await storage.readJson(LIBRARY_KEY)) || [];
+  const loadList = async (key) => (await storage.readJson(key)) || [];
+  const loadImported = () => loadList(LIBRARY_KEY);
+  const loadOutfits = () => loadList(OUTFITS_KEY);
+  // Pieces and outfits live in separate lists, and the id prefix says which one a record is in.
+  const listKey = (id) => isOutfitId(id) ? OUTFITS_KEY : LIBRARY_KEY;
 
-  // Re-reads the library so a concurrent edit or delete of another record survives the write.
+  // Re-reads the list so a concurrent edit or delete of another record survives the write.
   async function patchRecord(id, patch) {
-    const records = await loadImported();
+    const records = await loadList(listKey(id));
     const index = records.findIndex((record) => record.id === id);
     if (index === -1) return null;
     records[index] = { ...records[index], ...patch(records[index]) };
-    await storage.writeJson(LIBRARY_KEY, records);
+    await storage.writeJson(listKey(id), records);
     return records[index];
+  }
+
+  async function removeOutfits(shouldRemove) {
+    const outfits = await loadOutfits();
+    const removed = outfits.filter(shouldRemove);
+    if (!removed.length) return [];
+    await storage.writeJson(OUTFITS_KEY, outfits.filter((outfit) => !removed.includes(outfit)));
+    await Promise.all(removed.flatMap((outfit) => turnaroundFiles(outfit.id)).map((name) => storage.remove(`library/${name}`)));
+    return removed.map((outfit) => outfit.id);
   }
 
   const removeJob = (id) => storage.removePrefix(`jobs/${id}/`);
@@ -689,6 +763,20 @@ export function createImportApi({ storage, setting, background }) {
     return task;
   }
 
+  // A spin shows one piece, or every piece of an outfit. Either way the garments follow the model photo in the request.
+  async function turnaroundSubject(id) {
+    const pieces = await loadImported();
+    if (!isOutfitId(id)) {
+      const piece = pieces.find((item) => item.id === id);
+      return { garmentIds: [id], chromaKey: chooseChromaKey(piece?.color), prompt: (chromaKey) => turnaroundPrompt(chromaKey, piece), imageModel: setting("OPENAI_MODELED_MODEL", setting("OPENAI_IMAGE_MODEL", "gpt-image-2.6-sunburst")) };
+    }
+    const outfit = (await loadOutfits()).find((record) => record.id === id);
+    const entries = outfitEntries(outfit?.pieces, pieces);
+    if (!entries.length) throw new Error("None of this outfit's pieces are in the wardrobe any more.");
+    // Outfits default to the faster image model: a spin of several pieces is something to try and retry.
+    return { garmentIds: entries.map((entry) => entry.record.id), chromaKey: chooseChromaKey(...entries.map((entry) => entry.record.color)), prompt: (chromaKey) => outfitPrompt(chromaKey, entries), imageModel: setting("OPENAI_OUTFIT_MODEL", setting("OPENAI_IMAGE_MODEL", "gpt-image-2.6-flare")) };
+  }
+
   async function generateTurnaround(itemId) {
     const lock = `turnaround:${itemId}`;
     if (running.has(lock)) return running.get(lock);
@@ -697,10 +785,9 @@ export function createImportApi({ storage, setting, background }) {
         const key = setting("OPENAI_API_KEY");
         if (!key) throw new Error("OPENAI_API_KEY is not configured");
         const model = await pickModel();
-        const garment = await requireBytes(`library/${itemId}-garment.png`);
-        const piece = (await loadImported()).find((item) => item.id === itemId);
-        const chromaKey = chooseChromaKey(piece?.color);
-        const sheet = await openAIEdit({ key, baseUrl: apiBaseUrl(), responseModel: setting("OPENAI_IMAGE_TOOL_MODEL", setting("OPENAI_VISION_MODEL", "gpt-6.1-sol")), imageModel: setting("OPENAI_MODELED_MODEL", setting("OPENAI_IMAGE_MODEL", "gpt-image-2.6-sunburst")), quality: setting("OPENAI_IMAGE_QUALITY", "high"), size: "1536x1024", images: [{ data: model.data, mime: "image/png", name: "model.png" }, { data: garment, mime: "image/png", name: "garment.png" }], prompt: turnaroundPrompt(chromaKey, piece) });
+        const { garmentIds, chromaKey, prompt, imageModel } = await turnaroundSubject(itemId);
+        const garments = await Promise.all(garmentIds.map(async (id) => ({ data: await requireBytes(`library/${id}-garment.png`), mime: "image/png", name: `${id}-garment.png` })));
+        const sheet = await openAIEdit({ key, baseUrl: apiBaseUrl(), responseModel: setting("OPENAI_IMAGE_TOOL_MODEL", setting("OPENAI_VISION_MODEL", "gpt-6.1-sol")), imageModel, quality: setting("OPENAI_IMAGE_QUALITY", "high"), size: "1536x1024", images: [{ data: model.data, mime: "image/png", name: "model.png" }, ...garments], prompt: prompt(chromaKey) });
         const keyed = await Promise.all((await sliceTurnaround(sheet)).map(async (frame) => (await processChromaBackground(frame, chromaKey, { frame: false })).bytes));
         const frames = await stabilizeTurnaround(keyed);
         const names = turnaroundFiles(itemId);
@@ -747,20 +834,45 @@ export function createImportApi({ storage, setting, background }) {
   }
 
   async function route(request, url) {
-    if (url.pathname === "/api/import/wardrobe" && request.method === "GET") {
-      const stuck = (await loadImported()).filter(turnaroundStuck);
+    const listed = { "/api/import/wardrobe": LIBRARY_KEY, "/api/import/outfits": OUTFITS_KEY }[url.pathname];
+    if (listed && request.method === "GET") {
+      const stuck = (await loadList(listed)).filter(turnaroundStuck);
       for (const record of stuck) {
         await patchRecord(record.id, () => ({ turnaround: turnaroundState("failed", { error: "Generation timed out. Try again." }) }));
       }
-      return json(200, await loadImported());
+      return json(200, await loadList(listed));
     }
-    const turnaroundMatch = url.pathname.match(/^\/api\/import\/wardrobe\/(import-[a-f0-9-]{36})\/turnaround$/i);
+    const turnaroundMatch = url.pathname.match(/^\/api\/import\/(?:wardrobe\/(import-[a-f0-9-]{36})|outfits\/(outfit-[a-f0-9-]{36}))\/turnaround$/i);
     if (turnaroundMatch && request.method === "POST") {
-      const record = (await loadImported()).find((item) => item.id === turnaroundMatch[1]);
-      if (!record) return json(404, { error: "Imported wardrobe item not found" });
+      const id = turnaroundMatch[1] || turnaroundMatch[2];
+      const missing = { error: isOutfitId(id) ? "Outfit not found" : "Imported wardrobe item not found" };
+      const record = (await loadList(listKey(id))).find((item) => item.id === id);
+      if (!record) return json(404, missing);
       if (record.turnaround?.status === "processing" && !turnaroundStuck(record)) return json(409, { error: "A 360 view is already being prepared" });
       const started = await startTurnaround(record.id);
-      return started ? json(200, started) : json(404, { error: "Imported wardrobe item not found" });
+      return started ? json(200, started) : json(404, missing);
+    }
+    if (url.pathname === "/api/import/outfits" && request.method === "POST") {
+      const input = (await body(request)) || {};
+      const pieces = outfitSelection(input.pieces, await loadImported());
+      const outfits = await loadOutfits();
+      const existing = outfits.find((outfit) => outfitKey(outfit.pieces) === outfitKey(pieces));
+      if (existing) return json(200, existing);
+      const outfit = { id: `outfit-${randomUUID()}`, name: outfitName(input.name) || nextOutfitName(outfits), pieces, turnaround: turnaroundState("processing"), createdAt: new Date().toISOString() };
+      await storage.writeJson(OUTFITS_KEY, [...outfits, outfit]);
+      background(generateTurnaround(outfit.id));
+      return json(201, outfit);
+    }
+    const outfitMatch = url.pathname.match(/^\/api\/import\/outfits\/(outfit-[a-f0-9-]{36})$/i);
+    if (outfitMatch && request.method === "PATCH") {
+      const name = outfitName((await body(request))?.name);
+      if (!name) return json(400, { error: "Give the outfit a name." });
+      const outfit = await patchRecord(outfitMatch[1], () => ({ name, updatedAt: new Date().toISOString() }));
+      return outfit ? json(200, outfit) : json(404, { error: "Outfit not found" });
+    }
+    if (outfitMatch && request.method === "DELETE") {
+      const removed = await removeOutfits((outfit) => outfit.id === outfitMatch[1]);
+      return removed.length ? json(200, { deleted: true, id: outfitMatch[1] }) : json(404, { error: "Outfit not found" });
     }
     if (url.pathname === "/api/import/config" && request.method === "GET") {
       return json(200, await setupStatus());
@@ -781,7 +893,9 @@ export function createImportApi({ storage, setting, background }) {
       if (next.length === records.length) return json(404, { error: "Imported wardrobe item not found" });
       await storage.writeJson(LIBRARY_KEY, next);
       await Promise.all([`${id}-garment.png`, `${id}-modeled.png`, ...turnaroundFiles(id)].map((name) => storage.remove(`library/${name}`)));
-      return json(200, { deleted: true, id });
+      // An outfit without one of its pieces is a different outfit, so it goes with the piece.
+      const outfits = await removeOutfits((outfit) => Object.values(outfit.pieces).includes(id));
+      return json(200, { deleted: true, id, outfits });
     }
     const libraryAssetMatch = url.pathname.match(/^\/api\/import\/library\/([\w-][\w.-]*\.png)$/i);
     if (libraryAssetMatch && request.method === "GET") {

@@ -1,44 +1,29 @@
+import { applyCard, outfitCard, pieceCard } from "../server/share-card.mjs";
 import { createBlobStorage } from "../server/storage-blob.mjs";
 
-// Serves the app shell for /?piece=<id> with that piece's name and its front spin frame in the
-// share tags, so a pasted link previews the piece on the model instead of the generic site card.
+// Serves the app shell for /?piece=<id> and /?outfit=<id> with the name and the front spin frame of what the
+// link points at in the share tags, so a pasted link previews it on the model instead of the generic site card.
 // vercel.json routes this ahead of the filesystem, otherwise the static index.html wins.
 const storage = createBlobStorage({ token: process.env.BLOB_READ_WRITE_TOKEN });
-const LABELS = { upperbody: "Top", wholebody_up: "Jacket", lowerbody: "Bottom", accessories_up: "Accessory", shoes: "Shoes" };
-const escape = (value) => String(value).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
-const meta = (html, attribute, name, content) => html.replace(new RegExp(`<meta ${attribute}="${name}" content="[^"]*" />`), `<meta ${attribute}="${name}" content="${escape(content)}" />`);
+const readList = async (key) => (await storage.readJson(key).catch(() => null)) || [];
+
+// A link that carries both opens the piece on top of the outfit, so the piece is what it previews.
+async function findCard(params) {
+  const pieceId = params.get("piece");
+  const outfitId = params.get("outfit");
+  const records = await readList("library/library.json");
+  const piece = pieceId && records.find((record) => record.id === pieceId || record.id === `import-${pieceId}`);
+  if (piece) return pieceCard(piece);
+  const outfit = outfitId && (await readList("library/outfits.json")).find((record) => record.id === outfitId || record.id === `outfit-${outfitId}`);
+  return outfit ? outfitCard(outfit, records) : null;
+}
 
 export default {
   async fetch(request) {
     const url = new URL(request.url);
     const origin = `${url.protocol}//${url.host}`;
-    let html = await (await fetch(`${origin}/index.html`)).text();
-    const wanted = url.searchParams.get("piece") || "";
-    const records = (await storage.readJson("library/library.json").catch(() => null)) || [];
-    const piece = records.find((record) => record.id === wanted || record.id === `import-${wanted}`);
-    if (piece) {
-      const title = piece.name || "Wardrobe piece";
-      const details = [LABELS[piece.part], ...(piece.tags || []).slice(0, 3)].filter(Boolean).join(" \u00b7 ");
-      const description = `${details}. A piece in Drip, with a 360 spin.`;
-      const frame = piece.turnaround?.status === "ready" ? piece.turnaround.frames?.[0] : null;
-      const image = `${origin}${frame || piece.image}`;
-      const alt = frame ? `${title}, worn, front view` : `${title}, cutout`;
-      const link = `${origin}/?piece=${encodeURIComponent(piece.id.replace(/^import-/, ""))}`;
-      html = html.replace(/<title>[^<]*<\/title>/, `<title>${escape(title)} \u00b7 Drip</title>`);
-      html = meta(html, "name", "description", description);
-      html = meta(html, "property", "og:title", title);
-      html = meta(html, "property", "og:description", description);
-      html = meta(html, "name", "twitter:title", title);
-      html = meta(html, "name", "twitter:description", description);
-      html = html.replace("<meta name=\"twitter:card\" content=\"summary\" />", [
-        "<meta name=\"twitter:card\" content=\"summary_large_image\" />",
-        `<meta property="og:url" content="${escape(link)}" />`,
-        `<meta property="og:image" content="${escape(image)}" />`,
-        `<meta property="og:image:alt" content="${escape(alt)}" />`,
-        `<meta name="twitter:image" content="${escape(image)}" />`,
-        `<meta name="twitter:image:alt" content="${escape(alt)}" />`,
-      ].join("\n    "));
-    }
-    return new Response(html, { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "public, s-maxage=60, stale-while-revalidate=600" } });
+    const html = await (await fetch(`${origin}/index.html`)).text();
+    const card = await findCard(url.searchParams);
+    return new Response(card ? applyCard(html, origin, card) : html, { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "public, s-maxage=60, stale-while-revalidate=600" } });
   },
 };

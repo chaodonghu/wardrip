@@ -22,6 +22,9 @@ for (const name of (await readdir(path.join(dataDir, "models")).catch(() => []))
 const reference = await readFile(path.resolve(root, setting("WARDROBE_MODEL_REFERENCE", "data/model-reference.png"))).catch(() => null);
 if (reference) await upload("model-reference.png", await normalizeImage(reference), "image/png");
 await upload("library/library.json", await readFile(path.join(dataDir, "library.json")), "application/json");
+// Outfits built locally sit beside their frames, which the loop below uploads with the rest.
+const outfits = await readFile(path.join(dataDir, "imported", "outfits.json")).catch(() => null);
+if (outfits) await upload("library/outfits.json", outfits, "application/json");
 for (const name of (await readdir(path.join(dataDir, "imported"))).filter((file) => file.endsWith(".png")).sort()) {
   await upload(`library/${name}`, await readFile(path.join(dataDir, "imported", name)), "image/png");
 }
