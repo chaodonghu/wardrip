@@ -142,6 +142,8 @@ Code ships through Git. Data does not: imports and outfits made in the hosted ap
 
 Vercel stops a function after 300 seconds. If a generation step runs out of time, the job shows "Generation timed out. Try regenerating." six minutes after the step started.
 
+Preview deployments read the same Blob store as production. They have no import secret, so they are read-only: every write is refused. Add `WARDROBE_IMPORT_SECRET` and `OPENAI_API_KEY` to the Preview environment if you want to import from a preview, knowing it writes to the real library.
+
 ## Import with Codex
 
 The repo also bundles two Codex skills. One imports clothes from a folder and generates modeled photos; the other styles complete outfits into a modeled lookbook. The lookbook is separate from the outfits in the app: it writes square photos to `data/outfit-images/`, and the app does not show them.
